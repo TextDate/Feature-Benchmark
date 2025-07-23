@@ -1,0 +1,9 @@
+{
+    "english": ["the", "a", "an", "of", "to", "and", "in", "that", "it", "is", "was", "for", "on", "with", "as", "by", "at"],
+    "french": ["le", "la", "les", "un", "une", "et", "dans", "que", "il", "elle", "est", "était", "pour", "sur", "avec", "comme", "par", "à"],
+    "german": ["der", "die", "das", "ein", "eine", "und", "in", "dass", "es", "war", "ist", "für", "auf", "mit", "als", "von", "bei"],
+    "spanish": ["el", "la", "los", "un", "una", "y", "en", "que", "es", "fue", "para", "sobre", "con", "como", "por", "a"],
+    "italian": ["il", "la", "i", "un", "una", "e", "in", "che", "è", "era", "per", "su", "con", "come", "da", "a"],
+    "portuguese": ["o", "a", "os", "um", "uma", "e", "em", "que", "é", "foi", "para", "sobre", "com", "como", "por", "a"]
+  }
+  
