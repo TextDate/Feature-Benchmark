@@ -6,7 +6,7 @@ import json
 def clean_missing_values(train_csv, val_csv, test_csv, output_train_csv, output_val_csv, output_test_csv, columns_to_fix):
     """
     Replaces 'None' values in specified columns with the column's max value across all three datasets.
-    If a column has only 'None', replaces them with -1.
+    Handles different feature types (compression, NRC, NCD, target words) with appropriate defaults.
 
     :param train_csv: Path to input training CSV file
     :param val_csv: Path to input validation CSV file
@@ -17,15 +17,15 @@ def clean_missing_values(train_csv, val_csv, test_csv, output_train_csv, output_
     :param columns_to_fix: List of column names to process
     """
 
-    df_train = pd.read_csv(train_csv)
+    df_train = pd.read_csv(train_csv, na_values=["", "None"])
     df_train["decade"] = df_train["decade"].astype(int)
     df_train.to_csv(train_csv, index=False)
     
-    df_val = pd.read_csv(val_csv)
+    df_val = pd.read_csv(val_csv, na_values=["", "None"])
     df_val["decade"] = df_val["decade"].astype(int)
     df_val.to_csv(val_csv, index=False)
     
-    df_test = pd.read_csv(test_csv)
+    df_test = pd.read_csv(test_csv, na_values=["", "None"])
     df_test["decade"] = df_test["decade"].astype(int)
     df_test.to_csv(test_csv, index=False)
 
@@ -38,22 +38,33 @@ def clean_missing_values(train_csv, val_csv, test_csv, output_train_csv, output_
         if col in combined_df.columns:
             original_nulls = combined_df[col].isin(["None"]).sum()
 
-            combined_df[col] = combined_df[col].replace("None", pd.NA).astype("float64")
+            combined_df[col] = combined_df[col].replace(["None", "", 0.0], pd.NA).astype("float64")
 
             max_val = combined_df[col].max(skipna=True)
 
             if pd.isna(max_val):
-                print(f"Column '{col}' has only None values. Replacing with -1.")
-                max_val = -1
+                # Handle special cases for different feature types
+                if "NCD" in col:
+                    # NCD values should be between 0 and 1, use 1 for missing (maximum distance)
+                    max_val = 1.0
+                    print(f"Column '{col}' has only None values. Replacing with {max_val} (max NCD distance).")
+                elif "NRC" in col or "Compression_Ratio" in col:
+                    # For compression-based features, use a reasonable default
+                    max_val = 1.0
+                    print(f"Column '{col}' has only None values. Replacing with {max_val}.")
+                else:
+                    # For other features (target words, etc.), use -1
+                    max_val = -1
+                    print(f"Column '{col}' has only None values. Replacing with {max_val}.")
             else:
                 print(f"Replacing None in column '{col}' with max value: {max_val}")
 
             if original_nulls > 0:
                 changed_columns += 1
 
-            df_train[col] = df_train[col].replace("None", pd.NA).fillna(max_val)
-            df_val[col] = df_val[col].replace("None", pd.NA).fillna(max_val)
-            df_test[col] = df_test[col].replace("None", pd.NA).fillna(max_val)
+            df_train[col] = df_train[col].replace(["None", "", 0.0], pd.NA).fillna(max_val)
+            df_val[col] = df_val[col].replace(["None", "", 0.0], pd.NA).fillna(max_val)
+            df_test[col] = df_test[col].replace(["None", "", 0.0], pd.NA).fillna(max_val)
         else:
             missing_columns.append(col)
 
@@ -72,18 +83,47 @@ def clean_missing_values(train_csv, val_csv, test_csv, output_train_csv, output_
     
 def clean_missing_values_gutenberg(gutenberg_csv: str, output_gutenberg_csv: str, text_info_path: str):
     """
-    Cleans a Gutenberg CSV by replacing 'None' values in target word columns with the column's max value.
-    If a column has only 'None', replaces them with -1. Updates the file in-place.
+    Cleans a Gutenberg CSV by replacing 'None' values in feature columns with the column's max value.
+    Handles all feature types including compression, NRC, NCD, and target word features.
+    If a column has only 'None', replaces them with -1.
 
     Args:
-        csv_path (str): Path to the Gutenberg CSV.
+        gutenberg_csv (str): Path to the Gutenberg CSV.
+        output_gutenberg_csv (str): Path to save the cleaned CSV.
         text_info_path (str): Path to the text_info CSV with 'file_name' and 'decade'.
     """
-    df = pd.read_csv(gutenberg_csv)
+    df = pd.read_csv(gutenberg_csv, na_values=["", "None"])
 
     if "file_name" not in df.columns:
         print("The CSV must contain a 'file_name' column.", flush=True)
         return
+
+    # Identify feature columns that may have missing values (excluding metadata columns)
+    exclude_cols = {"file_name", "decade", "century", "year"}
+    feature_cols = [col for col in df.columns if col not in exclude_cols]
+
+    for col in feature_cols:
+        df[col] = pd.to_numeric(df[col].replace(["None", "", 0.0], pd.NA), errors="coerce")
+        missing_count = df[col].isna().sum()
+        max_val = df[col].max(skipna=True)
+        if pd.isna(max_val):
+            # Handle special cases for different feature types
+            if "NCD" in col:
+                # NCD values should be between 0 and 1, use 1 for missing (maximum distance)
+                replacement_val = 1.0
+                print(f"Column '{col}' has {missing_count} missing values and no valid entries. Replacing with {replacement_val} (max NCD distance).")
+            elif "NRC" in col or "Compression_Ratio" in col:
+                # For compression-based features, use a reasonable default
+                replacement_val = 1.0
+                print(f"Column '{col}' has {missing_count} missing values and no valid entries. Replacing with {replacement_val}.")
+            else:
+                # For other features (target words, etc.), use -1
+                replacement_val = -1
+                print(f"Column '{col}' has {missing_count} missing values and no valid entries. Replacing with {replacement_val}.")
+            max_val = replacement_val
+        else:
+            print(f"Replacing {missing_count} missing values in column '{col}' with max value: {max_val}")
+        df[col] = df[col].fillna(max_val)
 
     if "decade" not in df.columns:
         df["decade"] = None
@@ -91,23 +131,24 @@ def clean_missing_values_gutenberg(gutenberg_csv: str, output_gutenberg_csv: str
     df["decade"] = pd.to_numeric(df["decade"], errors="coerce")
     missing_mask = df["decade"].isna() | ~df["decade"].apply(lambda x: float(x).is_integer())
 
-    if not missing_mask.any():
-        print("All rows have valid 'decade' values.", flush=True)
-        return
+    if missing_mask.any():
 
-    print(f"Found {missing_mask.sum()} rows with missing or invalid 'decade'. Attempting to fix...", flush=True)
+        print(f"Found {missing_mask.sum()} rows with missing or invalid 'decade'. Attempting to fix...", flush=True)
 
-    text_info = pd.read_csv(text_info_path)[["file_name", "decade"]]
-    text_dict = dict(zip(text_info["file_name"], text_info["decade"]))
+        text_info = pd.read_csv(text_info_path, na_values=["", "None"])[["file_name", "decade"]]
+        text_dict = dict(zip(text_info["file_name"], text_info["decade"]))
 
-    df.loc[missing_mask, "decade"] = df.loc[missing_mask, "file_name"].map(text_dict)
+        df.loc[missing_mask, "decade"] = df.loc[missing_mask, "file_name"].map(text_dict)
 
-    still_missing = df[df["decade"].isna()]
-    if not still_missing.empty:
-        print(f"Could not fix {len(still_missing)} rows. They are still missing 'decade':", flush=True)
-        print(still_missing[["file_name"]])
+        still_missing = df[df["decade"].isna()]
+        if not still_missing.empty:
+            print(f"Could not fix {len(still_missing)} rows. They are still missing 'decade':", flush=True)
+            print(still_missing[["file_name"]])
+        else:
+            print("Successfully fixed all missing 'decade' values.", flush=True)
     else:
-        print("Successfully fixed all missing 'decade' values.", flush=True)
+        print("All rows have valid 'decade' values.", flush=True)
+
     
     df.to_csv(output_gutenberg_csv, index=False)
     print(f"Updated CSV saved to: {output_gutenberg_csv}", flush=True)
@@ -122,7 +163,7 @@ def check_and_fix_missing_decades(csv_path: str, text_info_path: str):
         csv_path (str): Path to the feature CSV.
         text_info_path (str): Path to the text_info CSV with 'file_name' and 'decade'.
     """
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path, na_values=["", "None"])
 
 
     if "file_name" not in df.columns:
@@ -143,7 +184,7 @@ def check_and_fix_missing_decades(csv_path: str, text_info_path: str):
 
     print(f"Found {missing_mask.sum()} rows with missing or invalid 'decade'. Attempting to fix...", flush=True)
 
-    text_info = pd.read_csv(text_info_path)[["file_name", "decade"]]
+    text_info = pd.read_csv(text_info_path, na_values=["", "None"])[["file_name", "decade"]]
     text_dict = dict(zip(text_info["file_name"], text_info["decade"]))
 
     df.loc[missing_mask, "decade"] = df.loc[missing_mask, "file_name"].map(text_dict)

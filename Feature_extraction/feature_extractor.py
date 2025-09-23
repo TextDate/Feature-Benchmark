@@ -23,7 +23,7 @@ import gc
 
 
 class TextFeatureExtractor:
-    def __init__(self, file_info_path, lang="english", num_threads=8, lowercase=False):
+    def __init__(self, file_info_path, lang="english", num_threads=8, lowercase=False, reference_text=None):
         """Initializes the feature extractor with stopwords and file info."""
         self.file_info_path = file_info_path
         self.file_info = pd.read_csv(file_info_path)[["file_name", "year", "decade", "century",]]
@@ -31,10 +31,22 @@ class TextFeatureExtractor:
         self.stop_words = self.get_stopwords(lang)
         self.num_threads = num_threads
         self.lowercase = lowercase
+        self.reference_text = reference_text
+        self.reference_model = None
+        if reference_text:
+            self._build_reference_model()
 
+    def _build_reference_model(self):
+        """Initialize reference models cache for NRC calculation."""
+        if not self.reference_text:
+            return
+
+        # Initialize empty cache - models will be built on-demand
+        self.reference_models = {}
 
     def extract_features_from_directory(self, directory: str, output_csv: str, target_words: set[str],
-                                        order=1, alphabet_size=256, word_distance_type="mean", batch_size=1000):
+                                        order=1, alphabet_size=256, word_distance_type="mean", batch_size=1000,
+                                        exclude_files_csv=None):
         """
         Extract features in memory-safe batches using multiprocessing.
         Each batch starts a new process pool to limit memory growth.
@@ -44,6 +56,14 @@ class TextFeatureExtractor:
             for root, _, files in os.walk(directory)
             for file in files if file.endswith(".txt")
         ]
+
+        # Exclude reference files if provided
+        if exclude_files_csv and os.path.exists(exclude_files_csv):
+            exclude_df = pd.read_csv(exclude_files_csv)
+            exclude_filenames = set(exclude_df['file_name'])
+            original_count = len(all_files)
+            all_files = [f for f in all_files if os.path.basename(f) not in exclude_filenames]
+            print(f"Excluded {original_count - len(all_files)} reference files", flush=True)
 
         print(f"Found {len(all_files)} text files in {directory}", flush=True)
         total_batches = math.ceil(len(all_files) / batch_size)
@@ -72,7 +92,9 @@ class TextFeatureExtractor:
                 itertools.repeat(word_distance_type),
                 itertools.repeat(self.file_info_path),
                 itertools.repeat(self.language),
-                itertools.repeat(self.num_threads)
+                itertools.repeat(self.num_threads),
+                itertools.repeat(self.reference_text),
+                itertools.repeat(self.lowercase)
             ))
 
             with ProcessPoolExecutor(max_workers=self.num_threads) as executor:
@@ -146,30 +168,32 @@ class TextFeatureExtractor:
         if self.lowercase:
             text = text.lower()
         features = {
-            "compression_ratio_markov_order_1": self.compression_ratio_markov(text, order=1),
-            "nrc_markov_order_1": self.nrc_markov(text, order=1, alphabet_size=alphabet_size),
-            "nrc_markov_shannon_order_1": self.nrc_markov_shannon(text, order=1),
-            f"compression_ratio_markov_order_{order}": self.compression_ratio_markov(text, order=order),
-            f"nrc_markov_order_{order}": self.nrc_markov(text, order=order, alphabet_size=alphabet_size),
-            f"nrc_markov_shannon_order_{order}": self.nrc_markov_shannon(text, order=order),
-            "shannon_entropy": self.shannon_entropy(text),
-            "avg_word_length": self.average_word_length(text),
-            "lexical_richness": self.lexical_richness(text),
-            "avg_sentence_length": self.average_sentence_length(text),
-            "punctuation_density": self.punctuation_density(text),
-            "syllable_per_word": self.syllable_per_word(text),
-            "uppercase_ratio": self.uppercase_ratio(text),
-            "digit_ratio": self.digit_ratio(text),
-            "special_character_ratio": self.special_character_ratio(text)
+            "Compression_Ratio_Order_1": self.compression_ratio(text, order=1),
+            "NRC_Order_1": self.nrc(text, order=1, alphabet_size=alphabet_size),
+            "NCD_Order_1": self.ncd(text, order=1),
+            "Entropy_Ratio_Order_1": self.entropy_ratio(text, order=1),
+            f"Compression_Ratio_Markov_Order_{order}": self.compression_ratio(text, order=order),
+            f"NRC_Order_{order}": self.nrc(text, order=order, alphabet_size=alphabet_size),
+            f"NCD_Order_{order}": self.ncd(text, order=order),
+            f"Entropy_Ratio_Order_{order}": self.entropy_ratio(text, order=order),
+            "Shannon_Entropy": self.shannon_entropy(text),
+            "Avg_Word_Length": self.average_word_length(text),
+            "Lexical_Richness": self.lexical_richness(text),
+            "Avg_Sentence_Length": self.average_sentence_length(text),
+            "Punctuation_Density": self.punctuation_density(text),
+            "Syllable_Per_Word": self.syllable_per_word(text),
+            "Uppercase_Ratio": self.uppercase_ratio(text),
+            "Digit_Ratio": self.digit_ratio(text),
+            "Special_Character_Ratio": self.special_character_ratio(text)
         }
         gc.collect()
         
         if self.language == "english":
-            features["flesch_readability"] = self.flesch_readability(text)
+            features["Flesch_Readability"] = self.flesch_readability(text)
         
         if len(self.stop_words) > 0:
-            features["stopword_ratio"] = self.stopword_ratio(text)
-            
+            features["Stopword_Ratio"] = self.stopword_ratio(text)
+
         if target_words:
             
             if word_distance_type == "mean":
@@ -184,7 +208,14 @@ class TextFeatureExtractor:
         
         return features
 
-    def compression_ratio_markov(self, text:str, order=1):
+    def compression_ratio(self, text:str, order=1):
+        """
+        Calculates compression ratio using Markov model of specified order.
+
+        :param text: The text to compress
+        :param order: Order of the Markov (PPM) model
+        :return: Compression ratio (compressed bits / original bits)
+        """
         if not text:
             return None
         try:
@@ -195,16 +226,17 @@ class TextFeatureExtractor:
             original_length = len(data) * 8
             return compressed_length / original_length
         except Exception as e:
-            print(f"[vomm] Crash in compression_ratio_markov: {e}", flush=True)
+            print(f"[vomm] Crash in compression_ratio: {e}", flush=True)
             traceback.print_exc()
             return None
 
 
-    def nrc_markov(self, text:str, order=1, alphabet_size=256):
+    def nrc(self, text:str, order=1, alphabet_size=256):
         """
-        Calculates NRC(x‖x) = C(x‖x) / (|x| * log2 |A|)
+        Calculates NRC using reference model if available, otherwise self-reference.
+        NRC(x‖r) = C(x‖r) / (|x| * log2 |A|) where r is reference text
 
-        :param text: The text to model and compress
+        :param text: The text to compress
         :param order: Order of the Markov (PPM) model
         :param alphabet_size: Alphabet size (256 for full ASCII/byte range)
         :return: NRC value (float)
@@ -214,22 +246,42 @@ class TextFeatureExtractor:
 
         data = [ord(c) for c in text]
 
-        model = vomm.ppm()
-        model.fit(data, d=order)
+        if hasattr(self, 'reference_models') and self.reference_text:
+            if order not in self.reference_models:
+                try:
+                    ref_text = self.reference_text.lower() if self.lowercase else self.reference_text
+                    ref_data = [ord(char) for char in ref_text]
+                    model = vomm.ppm()
+                    model.fit(ref_data, d=order)
+                    self.reference_models[order] = model
+                except Exception as e:
+                    print(f"Warning: Failed to build reference model for order {order}: {e}", flush=True)
+                    # Fall back to self-reference
+                    model = vomm.ppm()
+                    model.fit(data, d=order)
+            else:
+                model = self.reference_models[order]
+        else:
+            # Fall back to self-reference
+            model = vomm.ppm()
+            model.fit(data, d=order)
 
-        compressed_bits = -model.logpdf(data) / math.log(2)
-        max_bits = len(data) * math.log2(alphabet_size)
+        try:
+            compressed_bits = -model.logpdf(data) / math.log(2)
+            max_bits = len(data) * math.log2(alphabet_size)
+            return compressed_bits / max_bits if max_bits > 0 else None
+        except Exception as e:
+            print(f"Warning: NRC calculation failed: {e}")
+            return None
 
-        return compressed_bits / max_bits if max_bits > 0 else None
-    
-    def nrc_markov_shannon(self, text:str, order=1):
-        """Calculates the Normalized Relative Compression (NRC) using an order-1 Markov model."""
+    def entropy_ratio(self, text:str, order=1):
+        """Calculates the ratio between Markov-based entropy and Shannon entropy for given order."""
         if not text:
             return 0
         
         shannon_entropy = self.shannon_entropy(text)
         
-        markov_entropy = self.compression_ratio_markov(text, order=order) * 8
+        markov_entropy = self.compression_ratio(text, order=order) * 8
         
         return markov_entropy / shannon_entropy if shannon_entropy > 0 else 0
 
@@ -258,6 +310,12 @@ class TextFeatureExtractor:
         return 0 if not words else sum(len(sentence) for sentence in words) / len(words)
     
     def get_stopwords(self, lang="english"):
+        """
+        Gets stopwords for the specified language.
+
+        :param lang: Language code (e.g., 'english', 'french')
+        :return: Set of stopwords for the language
+        """
         try:
             return set(stopwords.words(lang))
         except OSError:
@@ -265,28 +323,92 @@ class TextFeatureExtractor:
             return set()
 
     def punctuation_density(self, text:str):
+        """Calculates the ratio of punctuation characters to total characters."""
         return 0 if not text else sum(1 for char in text if char in string.punctuation) / len(text)
 
-    def stopword_ratio(self, text:str):
-        words = text.split()
-        return 0 if not words else sum(1 for word in words if word.lower() in self.stop_words) / len(words)
-
-    def flesch_readability(self, text:str):
-        return textstat.flesch_reading_ease(text)
-
     def syllable_per_word(self, text:str):
+        """Calculates the average number of syllables per word."""
         words = text.split()
         return 0 if not words else sum(textstat.syllable_count(word) for word in words) / len(words)
 
     def uppercase_ratio(self, text:str):
+        """Calculates the ratio of uppercase letters to total letters."""
         total_letters = sum(1 for char in text if char.isalpha())
         return 0 if total_letters == 0 else sum(1 for char in text if char.isupper()) / total_letters
 
     def digit_ratio(self, text:str):
+        """Calculates the ratio of digits to total characters."""
         return 0 if len(text) == 0 else sum(1 for char in text if char.isdigit()) / len(text)
 
     def special_character_ratio(self, text:str):
+        """Calculates the ratio of special characters (non-alphanumeric, non-punctuation) to total characters."""
         return 0 if len(text) == 0 else sum(1 for char in text if not char.isalnum() and char not in string.punctuation and not char.isspace()) / len(text)
+
+    def flesch_readability(self, text:str):
+        """Calculates Flesch reading ease score (English only)."""
+        try:
+            return textstat.flesch_reading_ease(text)
+        except Exception as e:
+            print(f"Warning: Flesch readability calculation failed: {e}")
+            return None
+
+    def stopword_ratio(self, text:str):
+        """Calculates the ratio of stopwords to total words."""
+        words = text.split()
+        return 0 if not words else sum(1 for word in words if word.lower() in self.stop_words) / len(words)
+
+    def ncd(self, text:str, order=1):
+        """
+        Calculates Normalized Compression Distance (NCD) between text and reference.
+        NCD(x,y) = (C(xy) - min(C(x),C(y))) / max(C(x),C(y))
+
+        :param text: The text to compare
+        :param order: Order of the Markov (PPM) model
+        :return: NCD value between 0 and 1, or None if no reference available
+        """
+        if not text or not self.reference_text:
+            return None
+
+        try:
+            # Prepare text data
+            if self.lowercase:
+                text_data = text.lower()
+                ref_data = self.reference_text.lower()
+            else:
+                text_data = text
+                ref_data = self.reference_text
+
+            # Convert to byte arrays
+            text_bytes = [ord(c) for c in text_data]
+            ref_bytes = [ord(c) for c in ref_data]
+            concat_bytes = [ord(c) for c in text_data + ref_data]
+
+            # Build models and calculate compressed sizes
+            model_text = vomm.ppm()
+            model_text.fit(text_bytes, d=order)
+            c_text = -model_text.logpdf(text_bytes) / math.log(2)
+
+            model_ref = vomm.ppm()
+            model_ref.fit(ref_bytes, d=order)
+            c_ref = -model_ref.logpdf(ref_bytes) / math.log(2)
+
+            model_concat = vomm.ppm()
+            model_concat.fit(concat_bytes, d=order)
+            c_concat = -model_concat.logpdf(concat_bytes) / math.log(2)
+
+            # Calculate NCD
+            min_c = min(c_text, c_ref)
+            max_c = max(c_text, c_ref)
+
+            if max_c == 0:
+                return 0
+
+            ncd_value = (c_concat - min_c) / max_c
+            return max(0, min(1, ncd_value))  # Ensure value is between 0 and 1
+
+        except Exception as e:
+            print(f"Warning: NCD calculation failed: {e}")
+            return None
 
     def mean_word_distance(self, text:str, target_words:list[str]):
         """Computes the mean distance (in words) between occurrences of specified target words."""
@@ -353,8 +475,75 @@ class TextFeatureExtractor:
                 print(f"Failed to read {file_path}: {e}", flush=True)
 
         print(f"Global alphabet size: {len(unique_chars)}", flush=True)
-        
+
         return len(unique_chars)
+
+    def create_reference_file(self, source_directory: str, reference_file_path: str,
+                             used_files_csv: str, percentage: float = 0.05):
+        """
+        Creates a reference file by concatenating a percentage of files from source directory.
+        Saves list of used files to a CSV for exclusion from main processing.
+
+        Args:
+            source_directory: Directory containing source text files
+            reference_file_path: Path to save the reference text file
+            used_files_csv: Path to save CSV listing files used for reference
+            percentage: Percentage of files to use (default 0.05 = 5%)
+        """
+        import random
+
+        # Get all text files
+        all_files = []
+        for root, _, files in os.walk(source_directory):
+            for file in files:
+                if file.endswith(".txt"):
+                    all_files.append(os.path.join(root, file))
+
+        if not all_files:
+            print(f"No text files found in {source_directory}")
+            return
+
+        # Calculate number of files to use
+        num_files = max(1, int(len(all_files) * percentage))
+
+        # Randomly select files
+        random.seed(42)  # For reproducibility
+        selected_files = random.sample(all_files, num_files)
+
+        print(f"Creating reference from {num_files} files ({percentage*100:.1f}% of {len(all_files)} total files)")
+
+        # Concatenate selected files
+        reference_text = ""
+        used_files_data = []
+
+        for file_path in tqdm(selected_files, desc="Creating reference file"):
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read()
+                    if self.lowercase:
+                        text = text.lower()
+                    reference_text += text + "\n"
+
+                used_files_data.append({
+                    "file_path": file_path,
+                    "file_name": os.path.basename(file_path)
+                })
+            except Exception as e:
+                print(f"Error reading {file_path}: {e}")
+
+        # Save reference file
+        with open(reference_file_path, 'w', encoding='utf-8') as f:
+            f.write(reference_text)
+
+        # Save used files list
+        used_files_df = pd.DataFrame(used_files_data)
+        used_files_df.to_csv(used_files_csv, index=False)
+
+        print(f"Reference file saved to: {reference_file_path}", flush=True)
+        print(f"Used files list saved to: {used_files_csv}", flush=True)
+        print(f"Reference text length: {len(reference_text):,} characters", flush=True)
+
+        return reference_text
     
     def load_target_words(self, path=None):
         if not path:
@@ -375,18 +564,19 @@ def start_memory_logger(interval=300):
             time.sleep(interval)
     threading.Thread(target=log, daemon=True).start()
     
-def extract_with_timeout_worker(text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads):
+def extract_with_timeout_worker(text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads, reference_text, lowercase):
     return timeout_worker(
         do_work,
-        (text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads),
+        (text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads, reference_text, lowercase),
         timeout=300
     )
 
-def do_work(text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads):
+def do_work(text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads, reference_text, lowercase):
     with open(text_path, 'r', encoding='utf-8', errors='ignore') as file:
         text = file.read()
 
-    extractor = TextFeatureExtractor(file_info_path, lang=lang, num_threads=num_threads)
+    extractor = TextFeatureExtractor(file_info_path, lang=lang, num_threads=num_threads,
+                                   reference_text=reference_text, lowercase=lowercase)
     features = extractor.extract(
         text,
         target_words=target_words,
@@ -492,6 +682,8 @@ def parse_args():
     parser.add_argument("--chunk_size", type=int, default=2000, help="Number of files to process in each chunk")
     parser.add_argument("--threads", type=int, default=8, help="Number of parallel threads")
     parser.add_argument("--lowercase", action="store_true", help="Convert all text to lowercase before processing")
+    parser.add_argument("--create_references", action="store_true", help="Create reference files from 5% of train/validation datasets")
+    parser.add_argument("--reference_percentage", type=float, default=0.05, help="Percentage of files to use for reference")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -501,13 +693,6 @@ if __name__ == "__main__":
     
     start_memory_logger(interval=300)
 
-    extractor = TextFeatureExtractor(
-        file_info_path=args.file_info,
-        lang=args.lang,
-        num_threads=args.threads,
-        lowercase=args.lowercase
-    )
-
     if args.target_words:
         with open(args.target_words, "r", encoding="utf-8") as f:
             word_config = json.load(f)
@@ -515,54 +700,131 @@ if __name__ == "__main__":
     else:
         target_words = set()
 
-    if args.train and args.valid and args.test:
-        global_alphabet_size = extractor.compute_global_alphabet_size([args.train, args.valid, args.test])
-    elif args.gutenberg:
-        global_alphabet_size = extractor.compute_global_alphabet_size([args.gutenberg])
-    if args.train:
-        extractor.extract_features_from_directory(args.train, args.train_out, target_words, args.order, global_alphabet_size, args.word_distance, args.chunk_size)
-        extract_missing_files(
-    csv_path=args.train_out,
-    source_dir=args.train,
-    extractor=extractor,
-    target_words=target_words,
-    order=args.order,
-    alphabet_size=global_alphabet_size,
-    word_distance_type=args.word_distance
-    )
+    # Create reference files if requested
+    reference_files = {}
+    if args.create_references:
+        print("[INFO] Creating reference files...")
+
+        temp_extractor = TextFeatureExtractor(
+            file_info_path=args.file_info,
+            lang=args.lang,
+            num_threads=args.threads,
+            lowercase=args.lowercase
+        )
+
+        if args.train:
+            train_ref_text = temp_extractor.create_reference_file(
+                args.train,
+                f"{args.train}_reference.txt",
+                f"{args.train}_reference_files.csv",
+                args.reference_percentage
+            )
+            reference_files['train'] = train_ref_text
+
+        if args.valid:
+            valid_ref_text = temp_extractor.create_reference_file(
+                args.valid,
+                f"{args.valid}_reference.txt",
+                f"{args.valid}_reference_files.csv",
+                args.reference_percentage
+            )
+            reference_files['valid'] = valid_ref_text
+
+    # Load reference texts for processing
+    train_reference = reference_files.get('train', None)
+    valid_reference = reference_files.get('valid', None)
+
+    # For test and gutenberg, use entire validation dataset as reference
+    test_reference = None
+    gutenberg_reference = None
     if args.valid:
-        extractor.extract_features_from_directory(args.valid, args.valid_out, target_words, args.order, global_alphabet_size, args.word_distance, args.chunk_size)
-        extract_missing_files(
-    csv_path=args.valid_out,
-    source_dir=args.valid,
-    extractor=extractor,
-    target_words=target_words,
-    order=args.order,
-    alphabet_size=global_alphabet_size,
-    word_distance_type=args.word_distance
-    )
+        print("[INFO] Loading entire validation dataset as reference for test/gutenberg...")
+        temp_extractor = TextFeatureExtractor(
+            file_info_path=args.file_info,
+            lang=args.lang,
+            num_threads=args.threads,
+            lowercase=args.lowercase
+        )
+
+        # Create reference from entire validation dataset
+        all_valid_files = []
+        for root, _, files in os.walk(args.valid):
+            for file in files:
+                if file.endswith(".txt"):
+                    all_valid_files.append(os.path.join(root, file))
+
+        valid_full_text = ""
+        for file_path in tqdm(all_valid_files, desc="Loading validation reference"):
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    text = f.read()
+                    if args.lowercase:
+                        text = text.lower()
+                    valid_full_text += text + "\n"
+            except Exception as e:
+                print(f"Error reading {file_path}: {e}")
+
+        test_reference = valid_full_text
+        gutenberg_reference = valid_full_text
+        print(f"Validation reference text length: {len(valid_full_text):,} characters")
+
+    if args.train and args.valid and args.test:
+        global_alphabet_size = TextFeatureExtractor(args.file_info, args.lang, args.threads, args.lowercase).compute_global_alphabet_size([args.train, args.valid, args.test])
+    elif args.gutenberg:
+        global_alphabet_size = TextFeatureExtractor(args.file_info, args.lang, args.threads, args.lowercase).compute_global_alphabet_size([args.gutenberg])
+    if args.train:
+        train_extractor = TextFeatureExtractor(
+            file_info_path=args.file_info,
+            lang=args.lang,
+            num_threads=args.threads,
+            lowercase=args.lowercase,
+            reference_text=train_reference
+        )
+        exclude_csv = f"{args.train}_reference_files.csv" if args.create_references else None
+        train_extractor.extract_features_from_directory(
+            args.train, args.train_out, target_words, args.order,
+            global_alphabet_size, args.word_distance, args.chunk_size, exclude_csv
+        )
+
+    if args.valid:
+        valid_extractor = TextFeatureExtractor(
+            file_info_path=args.file_info,
+            lang=args.lang,
+            num_threads=args.threads,
+            lowercase=args.lowercase,
+            reference_text=valid_reference
+        )
+        exclude_csv = f"{args.valid}_reference_files.csv" if args.create_references else None
+        valid_extractor.extract_features_from_directory(
+            args.valid, args.valid_out, target_words, args.order,
+            global_alphabet_size, args.word_distance, args.chunk_size, exclude_csv
+        )
+
     if args.test:
-        extractor.extract_features_from_directory(args.test, args.test_out, target_words, args.order, global_alphabet_size, args.word_distance, args.chunk_size)
-        extract_missing_files(
-    csv_path=args.test_out,
-    source_dir=args.test,
-    extractor=extractor,
-    target_words=target_words,
-    order=args.order,
-    alphabet_size=global_alphabet_size,
-    word_distance_type=args.word_distance
-    )
+        test_extractor = TextFeatureExtractor(
+            file_info_path=args.file_info,
+            lang=args.lang,
+            num_threads=args.threads,
+            lowercase=args.lowercase,
+            reference_text=test_reference
+        )
+        test_extractor.extract_features_from_directory(
+            args.test, args.test_out, target_words, args.order,
+            global_alphabet_size, args.word_distance, args.chunk_size
+        )
+
     if args.gutenberg:
-        extractor.extract_features_from_directory(args.gutenberg, args.gutenberg_out, target_words, args.order, global_alphabet_size, args.word_distance, args.chunk_size)        
-        extract_missing_files(
-    csv_path=args.gutenberg_out,
-    source_dir=args.gutenberg,
-    extractor=extractor,
-    target_words=target_words,
-    order=args.order,
-    alphabet_size=global_alphabet_size,
-    word_distance_type=args.word_distance
-    )
+        gutenberg_extractor = TextFeatureExtractor(
+            file_info_path=args.file_info,
+            lang=args.lang,
+            num_threads=args.threads,
+            lowercase=args.lowercase,
+            reference_text=gutenberg_reference
+        )
+        gutenberg_extractor.extract_features_from_directory(
+            args.gutenberg, args.gutenberg_out, target_words, args.order,
+            global_alphabet_size, args.word_distance, args.chunk_size
+        )
 
     
 
