@@ -57,9 +57,10 @@ def evaluate(model, X, y, model_name, label_encoder, args):
         "r2": r2_score(y, y_pred)
     }
     
-    unique, counts = np.unique(y_pred, return_counts=True)
-    prediction_distribution = dict(zip(unique, counts))
-    results["prediction_distribution"] = prediction_distribution
+    if args.predict_distribution:
+        unique, counts = np.unique(y_pred, return_counts=True)
+        prediction_distribution = dict(zip(unique, counts))
+        results["prediction_distribution"] = prediction_distribution
 
     if args.save_confusion_matrix:
 
@@ -127,8 +128,14 @@ def main(args):
         X, y = load_test_data(args.test_file, args.target, drop_cols, label_encoder, feature_names, args.use_centuries, args.exclude_centuries)
         result = evaluate(model, X, y, model_name, label_encoder, args)
 
+        print(f"----- {model_name} Results -----", flush=True)
         for k, v in result.items():
-            print(f"{k}: {v:.4f}" if isinstance(v, (int, float)) else f"{k}: {v}", flush=True)
+            if isinstance(v, (int, float)):
+                print(f"{k}: {v:.4f}")
+            else:
+                print(f"{k}: {v}")
+        print("------------------------------", flush=True)
+
 
         df_result = pd.DataFrame([result])
         os.makedirs(args.output_dir, exist_ok=True)
@@ -136,9 +143,11 @@ def main(args):
         df_result.to_csv(output_csv, index=False)
         print(f"[INFO] Results saved to {output_csv}\n")
         
-        print("Prediction distribution:")
-        for cls, count in result["prediction_distribution"].items():
-            print(f"  {label_encoder.inverse_transform([cls])[0]}: {count}")
+        if args.predict_distribution:
+            print(f"[INFO] Prediction distribution for {model_name}:")
+            for cls, count in result["prediction_distribution"].items():
+                print(f"  {label_encoder.inverse_transform([cls])[0]}: {count}")
+            print("------------------------------", flush=True)
 
 
 if __name__ == "__main__":
@@ -151,6 +160,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_confusion_matrix", action="store_true", help="Save confusion matrix plot")
     parser.add_argument("--use_centuries", action="store_true", help="Convert decades to centuries for evaluation")
     parser.add_argument("--exclude_centuries", type=int, nargs='*', help="Centuries to exclude (e.g. 17 18)")
+    parser.add_argument("--predict_distribution", action="store_true", help="Print prediction distribution for each class")
     args = parser.parse_args()
     main(args)
     

@@ -13,6 +13,8 @@ scikit_learn==1.7.1
 seaborn==0.13.2
 shap==0.47.0
 textstat==0.7.5
+torch==2.6.0
 tqdm==4.67.1
+transformers==4.53.3
 vomm==0.1
 xgboost==3.0.2

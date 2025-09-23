@@ -5,6 +5,7 @@ import joblib
 import psutil
 import pandas as pd
 import numpy as np
+import warnings
 
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import TomekLinks
@@ -14,10 +15,17 @@ from sklearn.metrics import (
     root_mean_squared_error, mean_absolute_error, r2_score,
     precision_score, recall_score
 )
+from sklearn.exceptions import DataConversionWarning
+from torch import zero_
+warnings.filterwarnings(action='ignore', category=DataConversionWarning)
+
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 from catboost import CatBoostClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
 
 
 MODELS = {
@@ -25,8 +33,10 @@ MODELS = {
     "gradient_boosting": HistGradientBoostingClassifier(random_state=42, verbose=0, class_weight="balanced"),
     "xgboost": XGBClassifier(random_state=42, eval_metric='mlogloss', verbosity=0, n_jobs=-1),
     "lightgbm": LGBMClassifier(random_state=42, verbose=0, n_jobs=-1, class_weight="balanced"),
-    "catboost": CatBoostClassifier(random_state=42, verbose=0, thread_count=-1)
-    
+    "catboost": CatBoostClassifier(random_state=42, verbose=0, thread_count=-1),
+    "svm": SVC(probability=True, random_state=42),
+    "gnb": GaussianNB(),
+    "knn": KNeighborsClassifier(n_jobs=-1)
 }
 
 
@@ -81,12 +91,12 @@ def evaluate_model(model, X_val, y_val, label_encoder, args):
 
     results = {
         "Accuracy": accuracy_score(y_val_decoded, y_pred_decoded),
-        "F1 Macro": f1_score(y_val_decoded, y_pred_decoded, average="macro"),
-        "F1 Weighted": f1_score(y_val_decoded, y_pred_decoded, average="weighted"),
-        "Recall Macro": recall_score(y_val_decoded, y_pred_decoded, average="macro"),
-        "Recall Weighted": recall_score(y_val_decoded, y_pred_decoded, average="weighted"),
-        "Precision Macro": precision_score(y_val_decoded, y_pred_decoded, average="macro"),
-        "Precision Weighted": precision_score(y_val_decoded, y_pred_decoded, average="weighted"),
+        "F1 Macro": f1_score(y_val_decoded, y_pred_decoded, average="macro", zero_division=0),
+        "F1 Weighted": f1_score(y_val_decoded, y_pred_decoded, average="weighted", zero_division=0),
+        "Recall Macro": recall_score(y_val_decoded, y_pred_decoded, average="macro", zero_division=0),
+        "Recall Weighted": recall_score(y_val_decoded, y_pred_decoded, average="weighted", zero_division=0),
+        "Precision Macro": precision_score(y_val_decoded, y_pred_decoded, average="macro", zero_division=0),
+        "Precision Weighted": precision_score(y_val_decoded, y_pred_decoded, average="weighted", zero_division=0),
         "RMSE": root_mean_squared_error(y_val_decoded, y_pred_decoded),
         "MAE": mean_absolute_error(y_val_decoded, y_pred_decoded),
         "R2": r2_score(y_val_decoded, y_pred_decoded)
@@ -131,13 +141,15 @@ def train_and_save_models(args):
     for model_name in args.models:
         print(f"\n=== Training {model_name} with {args.n_estimators} estimators ===", flush=True)
         base_model = MODELS[model_name]
-        params = base_model.get_params()
-        params.pop("n_estimators", None)
 
         if model_name == "gradient_boosting":
             model = HistGradientBoostingClassifier(max_iter=args.n_estimators, random_state=42, verbose=0)
         else:
-            model = base_model.__class__(**params, n_estimators=args.n_estimators)
+            model_class = base_model.__class__
+            params = base_model.get_params()
+            if "n_estimators" in model_class().get_params():
+                params["n_estimators"] = args.n_estimators
+            model = model_class(**params)
 
         process = psutil.Process()
         start_ram = process.memory_info().rss / (1024 ** 3)

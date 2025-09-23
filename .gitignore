@@ -205,3 +205,23 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+
+
+# CatBoost is a gradient boosting library that is used for machine learning tasks.
+# It is recommended to ignore the CatBoost model files and cache directories.
+# These files can be large and are not necessary for version control.
+catboost_info/
+
+
+# Saved models
+#  This directory is used to store saved models, which can be large and are not necessary for version control.
+#  It is recommended to ignore this directory to avoid committing large files to the repository.
+Saved_models/
+
+# Logs
+#  This directory is used to store HPC logs, which can be large and are not necessary for version control.
+#  It is recommended to ignore this directory to avoid committing large files to the repository.
+Logs/
+bert*
+NN*
