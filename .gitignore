@@ -223,5 +223,6 @@ Saved_models/
 #  This directory is used to store HPC logs, which can be large and are not necessary for version control.
 #  It is recommended to ignore this directory to avoid committing large files to the repository.
 Logs/
+logs/
 bert*
 NN*
