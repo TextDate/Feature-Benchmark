@@ -1,12 +1,10 @@
-from ast import arg
-import itertools
 import json
 import os
 import string
 import math
 import numpy as np
 import pandas as pd
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, TimeoutError, as_completed
 from collections import Counter, defaultdict
 from nltk.corpus import stopwords
 import textstat
@@ -19,11 +17,25 @@ import threading
 import time
 import multiprocessing
 import gc
+import random
+import pickle
+import signal
+import resource
+import sys
+import warnings
+import logging
+
+# Global variables for worker initialization
+_global_extractor = None
+_global_target_words = None
+_global_reference_models = None
+_global_reference_data = None
+
 
 
 
 class TextFeatureExtractor:
-    def __init__(self, file_info_path, lang="english", num_threads=8, lowercase=False, reference_text=None):
+    def __init__(self, file_info_path, lang="english", num_threads=8, lowercase=False, reference_text=None, order=1, prebuilt_models=None, prebuilt_reference_data=None, use_ncd=True):
         """Initializes the feature extractor with stopwords and file info."""
         self.file_info_path = file_info_path
         self.file_info = pd.read_csv(file_info_path)[["file_name", "year", "decade", "century",]]
@@ -32,17 +44,74 @@ class TextFeatureExtractor:
         self.num_threads = num_threads
         self.lowercase = lowercase
         self.reference_text = reference_text
-        self.reference_model = None
-        if reference_text:
-            self._build_reference_model()
+        self.reference_models = prebuilt_models if prebuilt_models is not None else {}
+        self.use_ncd = use_ncd
 
-    def _build_reference_model(self):
-        """Initialize reference models cache for NRC calculation."""
-        if not self.reference_text:
+        # Use pre-computed reference data if provided, otherwise compute it
+        if prebuilt_reference_data is not None:
+            self._reference_data = prebuilt_reference_data
+        elif self.reference_text:
+            ref_text = self.reference_text.lower() if self.lowercase else self.reference_text
+            self._reference_data = [ord(char) for char in ref_text]
+        else:
+            self._reference_data = None
+
+        # Only build reference models if they weren't provided and reference text is available
+        if self.reference_text and not prebuilt_models:
+            self._build_reference_model(1)  # Always build for order=1
+            if order != 1:
+                self._build_reference_model(order)  # Build for the specified order if different
+
+    def _build_reference_model(self, order):
+        """Build reference model for a specific order on-demand with caching."""
+        if not self.reference_text or order in self.reference_models:
             return
 
-        # Initialize empty cache - models will be built on-demand
-        self.reference_models = {}
+        # Use cached reference data if available
+        if not hasattr(self, '_reference_data') or self._reference_data is None:
+            ref_text = self.reference_text.lower() if self.lowercase else self.reference_text
+            self._reference_data = [ord(char) for char in ref_text]
+
+        try:
+            print(f"Fitting reference model for order {order}...", flush=True)
+
+            # Log memory before model building
+            save_memory_snapshot()
+
+            model = vomm.ppm()
+            model.fit(self._reference_data, d=order)
+            self.reference_models[order] = model
+            print(f"Reference model for order {order} built successfully.", flush=True)
+
+            # Log memory after model building
+            save_memory_snapshot()
+
+        except Exception as e:
+            print(f"Warning: Failed to build reference model for order {order}: {e}", flush=True)
+
+    def build_and_serialize_reference_models(self, orders):
+        """Build reference models for multiple orders and return serialized data for worker processes."""
+        if not self.reference_text:
+            return None, None
+
+        # Build models for all required orders
+        for order in orders:
+            self._build_reference_model(order)
+
+        # Serialize models for transfer to workers
+        try:
+            serialized_models = {}
+            for order, model in self.reference_models.items():
+                # Serialize each model to bytes
+                serialized_models[order] = pickle.dumps(model)
+
+            # Also serialize reference data
+            serialized_reference_data = pickle.dumps(self._reference_data) if hasattr(self, '_reference_data') else None
+
+            return serialized_models, serialized_reference_data
+        except Exception as e:
+            print(f"Warning: Failed to serialize reference models: {e}", flush=True)
+            return None, None
 
     def extract_features_from_directory(self, directory: str, output_csv: str, target_words: set[str],
                                         order=1, alphabet_size=256, word_distance_type="mean", batch_size=1000,
@@ -75,7 +144,7 @@ class TextFeatureExtractor:
             timeout_files = []
             batch_path = f"{output_csv}_batch_{i:03}.csv"
             if os.path.exists(batch_path):
-                print(f"[SKIP] Batch {i+1} already processed ({batch_path})")
+                print(f"[SKIP] Batch {i+1} already processed ({batch_path})", flush=True)
                 output_paths.append(batch_path)
                 continue
             
@@ -84,38 +153,167 @@ class TextFeatureExtractor:
             print(f"\nBatch {i + 1}/{total_batches}: Processing files {i * batch_size}–{i * batch_size + len(batch) - 1}", flush=True)
             
 
-            args_iter = list(zip(
-                batch,
-                itertools.repeat(target_words),
-                itertools.repeat(order),
-                itertools.repeat(alphabet_size),
-                itertools.repeat(word_distance_type),
-                itertools.repeat(self.file_info_path),
-                itertools.repeat(self.language),
-                itertools.repeat(self.num_threads),
-                itertools.repeat(self.reference_text),
-                itertools.repeat(self.lowercase)
-            ))
+            # Use multiprocessing with worker initialization
+            print(f"[INFO] Using multiprocessing with {self.num_threads} threads")
 
-            with ProcessPoolExecutor(max_workers=self.num_threads) as executor:
-                for result, args in zip(tqdm(executor.map(extract_with_timeout_wrapper, args_iter), desc=f"Processing Batch {i+1}" ,total=len(args_iter)), args_iter):
-                    if result is None:
-                        timeout_files.append(args)
-                    else:
-                        results.append(result)
+            # Pre-serialize reference models for efficient transfer to workers
+            print(f"[INFO] Preparing reference models for worker processes...", flush=True)
+            serialized_models, serialized_reference_data = self.build_and_serialize_reference_models([1, order] if order != 1 else [1])
 
-            batch_df = pd.DataFrame(results)
-            batch_path = f"{output_csv}_batch_{i:03}.csv"
-            batch_df.to_csv(batch_path, index=False)
-            output_paths.append(batch_path)
+            # Create simplified arguments for worker
+            simplified_args = [(file_path, order, alphabet_size, word_distance_type) for file_path in batch]
 
-            print(f"[MEMORY] After batch {i+1} memory usage:")
-            self.log_mem()
+            print(f"[INFO] Starting ProcessPoolExecutor with {self.num_threads} workers for batch {i+1}", flush=True)
 
-            del results, batch_df, batch
+            # Enhanced ProcessPoolExecutor with comprehensive monitoring
+            executor_start_time = time.time()
+
+            with ProcessPoolExecutor(
+                max_workers=self.num_threads,
+                initializer=initialize_worker_with_models,
+                initargs=(self.file_info_path, self.language, self.lowercase,
+                         target_words, serialized_models, serialized_reference_data, self.use_ncd)
+            ) as executor:
+                try:
+                    print(f"[INFO] ProcessPoolExecutor created successfully. Submitting {len(simplified_args)} tasks...", flush=True)
+
+                    # Submit all tasks with timeout monitoring
+                    future_to_args = {}
+                    for args in simplified_args:
+                        future = executor.submit(file_processor, args)
+                        future_to_args[future] = args
+
+                    print(f"[INFO] All tasks submitted. Waiting for completion...", flush=True)
+
+                    # Monitor task completion with timeout
+                    results = []
+                    timeout_files = []
+                    completed_count = 0
+
+                    # Use as_completed with overall timeout
+
+                    try:
+                        for future in tqdm(as_completed(future_to_args),
+                                         total=len(future_to_args),
+                                         desc=f"Processing Batch {i+1}"):
+                            args = future_to_args[future]
+                            try:
+                                # Get result with individual timeout
+                                result = future.result()
+                                if result is not None:
+                                    results.append(result)
+                                else:
+                                    timeout_files.append(args)
+                                    print(f"[WARNING] Task returned None for {args[0]}", flush=True)
+                            except TimeoutError:
+                                print(f"[TIMEOUT] Task timed out for {args[0]}", flush=True)
+                                timeout_files.append(args)
+                            except Exception as task_e:
+                                print(f"[TASK-ERROR] Task failed for {args[0]}: {task_e}", flush=True)
+                                timeout_files.append(args)
+
+                            completed_count += 1
+
+                            # Log progress every 50 files
+                            if completed_count % 50 == 0:
+                                print(f"[PROGRESS] Completed {completed_count}/{len(simplified_args)} tasks in batch {i+1}", flush=True)
+
+                    except TimeoutError:
+                        print(f"[TIMEOUT] Overall batch timeout reached. Cancelling remaining tasks...", flush=True)
+
+                        # Cancel remaining tasks
+                        for future in future_to_args:
+                            if not future.done():
+                                future.cancel()
+                                timeout_files.append(future_to_args[future])
+
+                    executor_time = time.time() - executor_start_time
+                    print(f"[INFO] ProcessPoolExecutor completed in {executor_time:.1f} seconds. Results: {len(results)}, Timeouts: {len(timeout_files)}", flush=True)
+
+                except Exception as e:
+                    executor_time = time.time() - executor_start_time
+                    print(f"[MULTIPROCESSING-ERROR] ProcessPoolExecutor failed after {executor_time:.1f} seconds: {e}", flush=True)
+                    print(f"[MULTIPROCESSING-ERROR] Error type: {type(e).__name__}", flush=True)
+                    traceback.print_exc()
+
+                    # Log system state at multiprocessing failure
+                    try:
+                        current_process = psutil.Process()
+                        main_memory = current_process.memory_info().rss / 1024**3
+                        children = current_process.children(recursive=True)
+                        child_count = len(children)
+                        child_memory = sum(child.memory_info().rss for child in children if child.is_running()) / 1024**3
+
+                        print(f"[MULTIPROCESSING-ERROR] System state at failure:", flush=True)
+                        print(f"[MULTIPROCESSING-ERROR] Main process memory: {main_memory:.2f} GB", flush=True)
+                        print(f"[MULTIPROCESSING-ERROR] Child processes: {child_count}, using {child_memory:.2f} GB", flush=True)
+
+                        # Try to identify which workers are still alive
+                        for i, child in enumerate(children):
+                            try:
+                                child_mem = child.memory_info().rss / 1024**3
+                                print(f"[MULTIPROCESSING-ERROR] Child {i} (PID {child.pid}): {child_mem:.2f} GB, Status: {child.status()}", flush=True)
+                            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                                print(f"[MULTIPROCESSING-ERROR] Child {i}: No longer accessible", flush=True)
+
+                    except Exception as state_e:
+                        print(f"[MULTIPROCESSING-ERROR] Could not get system state: {state_e}", flush=True)
+                    # Fall back to sequential processing with proper initialization
+                    initialize_worker_with_models(self.file_info_path, self.language, self.lowercase,
+                                                 target_words, serialized_models, serialized_reference_data, self.use_ncd)
+                    for args in tqdm(simplified_args, desc=f"Processing Batch {i+1}"):
+                        try:
+                            result = file_processor(args)
+                            if result is None:
+                                timeout_files.append(args)
+                            else:
+                                results.append(result)
+                        except Exception as e:
+                            print(f"Error processing {args[0]}: {e}")
+                            timeout_files.append(args)
+
+            if results:
+                batch_df = pd.DataFrame(results)
+                batch_path = f"{output_csv}_batch_{i:03}.csv"
+                batch_df.to_csv(batch_path, index=False)
+                output_paths.append(batch_path)
+                del batch_df
+            else:
+                print(f"WARNING: Batch {i+1} produced no results (likely due to OOM or processing failures)", flush=True)
+
+            print(f"[MEMORY] After batch {i+1} memory usage:", flush=True)
+            self.log_memory_usage()
+
+            # Log worker memory distribution for multiprocessing analysis
+            log_worker_memory_distribution()
+
+            # Detect potential memory leaks
+            detect_memory_leaks()
+
+            del results, batch
             gc.collect()
 
-        dfs = [pd.read_csv(p) for p in output_paths]
+        if not output_paths:
+            print("ERROR: No batches produced any results. All processing failed.", flush=True)
+            raise RuntimeError("No successful feature extraction results")
+
+        dfs = []
+        for p in output_paths:
+            try:
+                df = pd.read_csv(p)
+                if not df.empty:
+                    dfs.append(df)
+                else:
+                    print(f"WARNING: Skipping empty CSV file: {p}", flush=True)
+            except pd.errors.EmptyDataError:
+                print(f"WARNING: Skipping malformed CSV file: {p}", flush=True)
+            except Exception as e:
+                print(f"WARNING: Error reading {p}: {e}", flush=True)
+
+        if not dfs:
+            print("ERROR: No valid CSV files could be read.", flush=True)
+            raise RuntimeError("No valid feature extraction results")
+
         final_df = pd.concat(dfs, ignore_index=True)
         final_df = final_df.merge(self.file_info, on="file_name", how="left")
         final_df.to_csv(output_csv, index=False)
@@ -124,8 +322,15 @@ class TextFeatureExtractor:
             print(f"\n[INFO] Retrying {len(timeout_files)} timed out files sequentially...", flush=True)
             retried = []
 
+            # Pre-serialize reference models for retry processing
+            serialized_models, serialized_reference_data = self.build_and_serialize_reference_models([1, order] if order != 1 else [1])
+
+            # Initialize worker for sequential retry
+            initialize_worker_with_models(self.file_info_path, self.language, self.lowercase,
+                                        target_words, serialized_models, serialized_reference_data, self.use_ncd)
+
             for args in tqdm(timeout_files, desc="Retrying timeouts", unit="file"):
-                result = extract_with_timeout_worker(*args)
+                result = file_processor(args)
                 if result:
                     retried.append(result)
 
@@ -141,7 +346,7 @@ class TextFeatureExtractor:
 
 
         print(f"\nFeature extraction complete. Data saved to {output_csv}", flush=True)
-        self.log_mem("Final ")
+        self.log_memory_usage("Final ")
 
 
 
@@ -154,7 +359,8 @@ class TextFeatureExtractor:
             features = self.extract(text, target_words,
                                     order=order,
                                     alphabet_size=alphabet_size,
-                                    word_distance_type=word_distance_type)
+                                    word_distance_type=word_distance_type,
+                                    use_ncd=self.use_ncd)
             features["file_name"] = os.path.basename(text_path)
             return features
         except Exception as e:
@@ -163,49 +369,65 @@ class TextFeatureExtractor:
 
 
 
-    def extract(self, text:str, target_words=set[str], order=1, alphabet_size=256, word_distance_type="mean"):
+    def extract(self, text:str, target_words=set[str], order=None, alphabet_size=69, word_distance_type="mean", use_ncd=True):
         """Extracts all features dynamically from a given text."""
         if self.lowercase:
             text = text.lower()
+
+        # Pre-compute commonly used values to avoid redundant processing
+        words = text.split()  # Compute once, reuse multiple times
+        char_counter = Counter(text)  # Compute once for entropy and other char-based features
+        text_length = len(text)  # Cache text length
+        word_count = len(words)  # Cache word count
+
+        # Build features dictionary - conditionally include NCD
         features = {
             "Compression_Ratio_Order_1": self.compression_ratio(text, order=1),
             "NRC_Order_1": self.nrc(text, order=1, alphabet_size=alphabet_size),
-            "NCD_Order_1": self.ncd(text, order=1),
             "Entropy_Ratio_Order_1": self.entropy_ratio(text, order=1),
-            f"Compression_Ratio_Markov_Order_{order}": self.compression_ratio(text, order=order),
-            f"NRC_Order_{order}": self.nrc(text, order=order, alphabet_size=alphabet_size),
-            f"NCD_Order_{order}": self.ncd(text, order=order),
-            f"Entropy_Ratio_Order_{order}": self.entropy_ratio(text, order=order),
-            "Shannon_Entropy": self.shannon_entropy(text),
-            "Avg_Word_Length": self.average_word_length(text),
-            "Lexical_Richness": self.lexical_richness(text),
+            "Shannon_Entropy": self.shannon_entropy(char_counter),
+            "Avg_Word_Length": self.average_word_length(words, word_count),
+            "Lexical_Richness": self.lexical_richness(words, word_count),
             "Avg_Sentence_Length": self.average_sentence_length(text),
-            "Punctuation_Density": self.punctuation_density(text),
-            "Syllable_Per_Word": self.syllable_per_word(text),
-            "Uppercase_Ratio": self.uppercase_ratio(text),
-            "Digit_Ratio": self.digit_ratio(text),
-            "Special_Character_Ratio": self.special_character_ratio(text)
+            "Punctuation_Density": self.punctuation_density(text, text_length),
+            "Syllable_Per_Word": self.syllable_per_word(words, word_count),
+            "Digit_Ratio": self.digit_ratio(text, text_length),
+            "Special_Character_Ratio": self.special_character_ratio(text, text_length)
         }
-        gc.collect()
-        
+
+        # Add NCD if enabled
+        if use_ncd:
+            features["NCD_Order_1"] = self.ncd(text, order=1)
+
+        # Add higher order features if order is specified and not 1
+        if order is not None and order != 1:
+            higher_order_features = {
+                f"Compression_Ratio_Markov_Order_{order}": self.compression_ratio(text, order=order),
+                f"NRC_Order_{order}": self.nrc(text, order=order, alphabet_size=alphabet_size),
+                f"Entropy_Ratio_Order_{order}": self.entropy_ratio(text, order=order),
+            }
+
+            # Add higher order NCD if enabled
+            if use_ncd:
+                higher_order_features[f"NCD_Order_{order}"] = self.ncd(text, order=order)
+
+            features.update(higher_order_features)
+
         if self.language == "english":
             features["Flesch_Readability"] = self.flesch_readability(text)
-        
+
         if len(self.stop_words) > 0:
-            features["Stopword_Ratio"] = self.stopword_ratio(text)
+            features["Stopword_Ratio"] = self.stopword_ratio(words, word_count)
 
         if target_words:
-            
             if word_distance_type == "mean":
-                word_distances = self.mean_word_distance(text, target_words)
-                
+                word_distances = self.mean_word_distance(words, target_words)
             elif word_distance_type == "median":
-                word_distances = self.median_word_distance(text, target_words)
+                word_distances = self.median_word_distance(words, target_words)
 
             for feature_name, value in word_distances.items():
                 features[feature_name] = value
-        gc.collect()
-        
+
         return features
 
     def compression_ratio(self, text:str, order=1):
@@ -233,8 +455,8 @@ class TextFeatureExtractor:
 
     def nrc(self, text:str, order=1, alphabet_size=256):
         """
-        Calculates NRC using reference model if available, otherwise self-reference.
-        NRC(x‖r) = C(x‖r) / (|x| * log2 |A|) where r is reference text
+        Calculates NRC using pre-built reference model if available, otherwise self-reference.
+        NRC(x‖y) = C(x‖y) / (|x| * log2 |A|) where y is reference text
 
         :param text: The text to compress
         :param order: Order of the Markov (PPM) model
@@ -246,21 +468,9 @@ class TextFeatureExtractor:
 
         data = [ord(c) for c in text]
 
-        if hasattr(self, 'reference_models') and self.reference_text:
-            if order not in self.reference_models:
-                try:
-                    ref_text = self.reference_text.lower() if self.lowercase else self.reference_text
-                    ref_data = [ord(char) for char in ref_text]
-                    model = vomm.ppm()
-                    model.fit(ref_data, d=order)
-                    self.reference_models[order] = model
-                except Exception as e:
-                    print(f"Warning: Failed to build reference model for order {order}: {e}", flush=True)
-                    # Fall back to self-reference
-                    model = vomm.ppm()
-                    model.fit(data, d=order)
-            else:
-                model = self.reference_models[order]
+        # Use pre-built reference model if available, otherwise self-reference
+        if order in self.reference_models:
+            model = self.reference_models[order]
         else:
             # Fall back to self-reference
             model = vomm.ppm()
@@ -271,37 +481,41 @@ class TextFeatureExtractor:
             max_bits = len(data) * math.log2(alphabet_size)
             return compressed_bits / max_bits if max_bits > 0 else None
         except Exception as e:
-            print(f"Warning: NRC calculation failed: {e}")
+            print(f"Warning: NRC calculation failed: {e}", flush=True)
             return None
 
     def entropy_ratio(self, text:str, order=1):
         """Calculates the ratio between Markov-based entropy and Shannon entropy for given order."""
         if not text:
             return 0
-        
-        shannon_entropy = self.shannon_entropy(text)
-        
+
+        char_counter = Counter(text)
+        shannon_entropy = self.shannon_entropy(char_counter)
+
         markov_entropy = self.compression_ratio(text, order=order) * 8
-        
+
         return markov_entropy / shannon_entropy if shannon_entropy > 0 else 0
 
-    def shannon_entropy(self, text:str):
-        """Computes Shannon entropy."""
-        if not text:
+    def shannon_entropy(self, char_counter):
+        """Computes Shannon entropy using pre-computed character counter."""
+        if not char_counter:
             return 0
-        char_counts = Counter(text)
-        total_chars = len(text)
-        return -sum((count / total_chars) * math.log2(count / total_chars) for count in char_counts.values())
+        total_chars = sum(char_counter.values())
+        return -sum((count / total_chars) * math.log2(count / total_chars) for count in char_counter.values())
 
-    def average_word_length(self, text:str):
-        """Calculates the average word length."""
-        words = text.split()
-        return 0 if not words else sum(len(word) for word in words) / len(words)
+    def average_word_length(self, words, word_count=None):
+        """Calculates the average word length using pre-split words."""
+        if not words:
+            return 0
+        word_count = word_count if word_count is not None else len(words)
+        return sum(len(word) for word in words) / word_count
 
-    def lexical_richness(self, text:str):
-        """Computes lexical richness."""
-        words = text.split()
-        return 0 if not words else len(set(words)) / len(words)
+    def lexical_richness(self, words, word_count=None):
+        """Computes lexical richness using pre-split words."""
+        if not words:
+            return 0
+        word_count = word_count if word_count is not None else len(words)
+        return len(set(words)) / word_count
 
     def average_sentence_length(self, text:str):
         """Computes average sentence length in words."""
@@ -322,40 +536,54 @@ class TextFeatureExtractor:
             print(f"Stopwords not available for language: {lang}, defaulting to empty set.", flush=True)
             return set()
 
-    def punctuation_density(self, text:str):
-        """Calculates the ratio of punctuation characters to total characters."""
-        return 0 if not text else sum(1 for char in text if char in string.punctuation) / len(text)
+    def punctuation_density(self, text:str, text_length=None):
+        """Calculates the ratio of punctuation characters to total characters using cached length."""
+        if not text:
+            return 0
+        text_length = text_length if text_length is not None else len(text)
+        return sum(1 for char in text if char in string.punctuation) / text_length
 
-    def syllable_per_word(self, text:str):
-        """Calculates the average number of syllables per word."""
-        words = text.split()
-        return 0 if not words else sum(textstat.syllable_count(word) for word in words) / len(words)
+    def syllable_per_word(self, words, word_count=None):
+        """Calculates the average number of syllables per word using pre-split words."""
+        if not words:
+            return 0
+        word_count = word_count if word_count is not None else len(words)
+        return sum(textstat.syllable_count(word) for word in words) / word_count
 
-    def uppercase_ratio(self, text:str):
-        """Calculates the ratio of uppercase letters to total letters."""
-        total_letters = sum(1 for char in text if char.isalpha())
-        return 0 if total_letters == 0 else sum(1 for char in text if char.isupper()) / total_letters
+    # def uppercase_ratio(self, text:str):
+    #     """Calculates the ratio of uppercase letters to total letters."""
+    #     total_letters = sum(1 for char in text if char.isalpha())
+    #     return 0 if total_letters == 0 else sum(1 for char in text if char.isupper()) / total_letters
 
-    def digit_ratio(self, text:str):
-        """Calculates the ratio of digits to total characters."""
-        return 0 if len(text) == 0 else sum(1 for char in text if char.isdigit()) / len(text)
 
-    def special_character_ratio(self, text:str):
-        """Calculates the ratio of special characters (non-alphanumeric, non-punctuation) to total characters."""
-        return 0 if len(text) == 0 else sum(1 for char in text if not char.isalnum() and char not in string.punctuation and not char.isspace()) / len(text)
+    def digit_ratio(self, text:str, text_length=None):
+        """Calculates the ratio of digits to total characters using cached length."""
+        if not text:
+            return 0
+        text_length = text_length if text_length is not None else len(text)
+        return sum(1 for char in text if char.isdigit()) / text_length
+
+    def special_character_ratio(self, text:str, text_length=None):
+        """Calculates the ratio of special characters using cached length."""
+        if not text:
+            return 0
+        text_length = text_length if text_length is not None else len(text)
+        return sum(1 for char in text if not char.isalnum() and char not in string.punctuation and not char.isspace()) / text_length
 
     def flesch_readability(self, text:str):
         """Calculates Flesch reading ease score (English only)."""
         try:
             return textstat.flesch_reading_ease(text)
         except Exception as e:
-            print(f"Warning: Flesch readability calculation failed: {e}")
+            print(f"Warning: Flesch readability calculation failed: {e}", flush=True)
             return None
 
-    def stopword_ratio(self, text:str):
-        """Calculates the ratio of stopwords to total words."""
-        words = text.split()
-        return 0 if not words else sum(1 for word in words if word.lower() in self.stop_words) / len(words)
+    def stopword_ratio(self, words, word_count=None):
+        """Calculates the ratio of stopwords to total words using pre-split words."""
+        if not words:
+            return 0
+        word_count = word_count if word_count is not None else len(words)
+        return sum(1 for word in words if word.lower() in self.stop_words) / word_count
 
     def ncd(self, text:str, order=1):
         """
@@ -366,32 +594,43 @@ class TextFeatureExtractor:
         :param order: Order of the Markov (PPM) model
         :return: NCD value between 0 and 1, or None if no reference available
         """
-        if not text or not self.reference_text:
+        if not text or (not self.reference_text and not hasattr(self, '_reference_data')):
             return None
 
         try:
             # Prepare text data
-            if self.lowercase:
-                text_data = text.lower()
-                ref_data = self.reference_text.lower()
-            else:
-                text_data = text
-                ref_data = self.reference_text
-
-            # Convert to byte arrays
+            text_data = text.lower() if self.lowercase else text
             text_bytes = [ord(c) for c in text_data]
-            ref_bytes = [ord(c) for c in ref_data]
+
+            # Use pre-computed reference data if available, otherwise compute from reference_text
+            if hasattr(self, '_reference_data') and self._reference_data is not None:
+                ref_bytes = self._reference_data
+                # Convert reference data back to string for concatenation
+                ref_chars = [chr(c) for c in ref_bytes]
+                ref_data = ''.join(ref_chars)
+            else:
+                ref_data = self.reference_text.lower() if self.lowercase else self.reference_text
+                ref_bytes = [ord(c) for c in ref_data]
+
+            # Convert to byte arrays for concatenation
             concat_bytes = [ord(c) for c in text_data + ref_data]
 
-            # Build models and calculate compressed sizes
+            # Build text model and calculate compressed size
             model_text = vomm.ppm()
             model_text.fit(text_bytes, d=order)
             c_text = -model_text.logpdf(text_bytes) / math.log(2)
 
-            model_ref = vomm.ppm()
-            model_ref.fit(ref_bytes, d=order)
-            c_ref = -model_ref.logpdf(ref_bytes) / math.log(2)
+            # Use pre-built reference model if available (like NRC does)
+            if order in self.reference_models:
+                model_ref = self.reference_models[order]
+                c_ref = -model_ref.logpdf(ref_bytes) / math.log(2)
+            else:
+                # Fall back to building reference model
+                model_ref = vomm.ppm()
+                model_ref.fit(ref_bytes, d=order)
+                c_ref = -model_ref.logpdf(ref_bytes) / math.log(2)
 
+            # Build concatenated model (must be unique for each file)
             model_concat = vomm.ppm()
             model_concat.fit(concat_bytes, d=order)
             c_concat = -model_concat.logpdf(concat_bytes) / math.log(2)
@@ -407,15 +646,17 @@ class TextFeatureExtractor:
             return max(0, min(1, ncd_value))  # Ensure value is between 0 and 1
 
         except Exception as e:
-            print(f"Warning: NCD calculation failed: {e}")
+            print(f"Warning: NCD calculation failed: {e}", flush=True)
             return None
 
-    def mean_word_distance(self, text:str, target_words:list[str]):
-        """Computes the mean distance (in words) between occurrences of specified target words."""
-        words = text.lower().split()
+    def mean_word_distance(self, words, target_words:list[str]):
+        """Computes the mean distance using pre-split words."""
         word_positions = defaultdict(list)
 
-        for index, word in enumerate(words):
+        # Convert words to lowercase for comparison if not already done
+        words_lower = [word.lower() for word in words] if not self.lowercase else words
+
+        for index, word in enumerate(words_lower):
             if word in target_words:
                 word_positions[word].append(index)
 
@@ -429,12 +670,15 @@ class TextFeatureExtractor:
 
         return mean_distances
     
-    def median_word_distance(self, text:str, target_words:list[str]):
-        """Computes the median distance (in words) between occurrences of specified target words."""
-        words = text.lower().split()
+
+    def median_word_distance(self, words, target_words:list[str]):
+        """Computes the median distance using pre-split words."""
         word_positions = defaultdict(list)
 
-        for index, word in enumerate(words):
+        # Convert words to lowercase for comparison if not already done
+        words_lower = [word.lower() for word in words] if not self.lowercase else words
+
+        for index, word in enumerate(words_lower):
             if word in target_words:
                 word_positions[word].append(index)
 
@@ -483,6 +727,7 @@ class TextFeatureExtractor:
         """
         Creates a reference file by concatenating a percentage of files from source directory.
         Saves list of used files to a CSV for exclusion from main processing.
+        Uses caching - if reference file already exists, loads it instead of recreating.
 
         Args:
             source_directory: Directory containing source text files
@@ -490,7 +735,17 @@ class TextFeatureExtractor:
             used_files_csv: Path to save CSV listing files used for reference
             percentage: Percentage of files to use (default 0.05 = 5%)
         """
-        import random
+        # Check if reference file already exists
+        if os.path.exists(reference_file_path) and os.path.exists(used_files_csv):
+            print(f"Reference file already exists, loading: {reference_file_path}", flush=True)
+            try:
+                with open(reference_file_path, 'r', encoding='utf-8') as f:
+                    reference_text = f.read()
+                print(f"Loaded existing reference text: {len(reference_text):,} characters", flush=True)
+                return reference_text
+            except Exception as e:
+                print(f"Error loading existing reference file: {e}. Creating new one...", flush=True)
+
 
         # Get all text files
         all_files = []
@@ -510,7 +765,7 @@ class TextFeatureExtractor:
         random.seed(42)  # For reproducibility
         selected_files = random.sample(all_files, num_files)
 
-        print(f"Creating reference from {num_files} files ({percentage*100:.1f}% of {len(all_files)} total files)")
+        print(f"Creating reference from {num_files} files ({percentage*100:.1f}% of {len(all_files)} total files)", flush=True)
 
         # Concatenate selected files
         reference_text = ""
@@ -529,7 +784,7 @@ class TextFeatureExtractor:
                     "file_name": os.path.basename(file_path)
                 })
             except Exception as e:
-                print(f"Error reading {file_path}: {e}")
+                print(f"Error reading {file_path}: {e}", flush=True)
 
         # Save reference file
         with open(reference_file_path, 'w', encoding='utf-8') as f:
@@ -551,118 +806,384 @@ class TextFeatureExtractor:
         with open(path, "r", encoding="utf-8") as f:
             return set(w.strip().lower() for w in f.readlines() if w.strip())
 
-    def log_mem(self, prefix=""):
-        mem = psutil.Process(os.getpid()).memory_info().rss / 1024**3
-        print(f"[MEMORY] {prefix}Memory usage: {mem:.2f} GB", flush=True)
+    def log_memory_usage(self, prefix=""):
+        """Log current memory usage."""
+        try:
+            process = psutil.Process(os.getpid())
+            main_memory = process.memory_info().rss / 1024**3
+
+            children = process.children(recursive=True)
+            if children:
+                print(f"[MEMORY] {prefix}Main: {main_memory:.2f} GB", flush=True)
+                for i, child in enumerate(children):
+                    try:
+                        child_memory = child.memory_info().rss / 1024**3
+                        print(f"[MEMORY] {prefix}Worker {i+1}: {child_memory:.2f} GB", flush=True)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        print(f"[MEMORY] {prefix}Worker {i+1}: Finished", flush=True)
+            else:
+                print(f"[MEMORY] {prefix}Current memory usage: {main_memory:.2f} GB", flush=True)
+        except Exception as e:
+            print(f"[MEMORY] {prefix}Unable to get memory info: {e}", flush=True)
         
-def start_memory_logger(interval=300):
-    """Print memory usage every `interval` seconds."""
-    def log():
+def start_memory_logger(interval=60):
+    """Print current memory usage every `interval` seconds."""
+    def log_memory():
         while True:
-            mem = psutil.Process().memory_info().rss / 1024**3
-            print(f"[MEMORY] Current memory usage: {mem:.2f} GB", flush=True)
-            time.sleep(interval)
-    threading.Thread(target=log, daemon=True).start()
-    
-def extract_with_timeout_worker(text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads, reference_text, lowercase):
-    return timeout_worker(
-        do_work,
-        (text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads, reference_text, lowercase),
-        timeout=300
-    )
-
-def do_work(text_path, target_words, order, alphabet_size, word_distance_type, file_info_path, lang, num_threads, reference_text, lowercase):
-    with open(text_path, 'r', encoding='utf-8', errors='ignore') as file:
-        text = file.read()
-
-    extractor = TextFeatureExtractor(file_info_path, lang=lang, num_threads=num_threads,
-                                   reference_text=reference_text, lowercase=lowercase)
-    features = extractor.extract(
-        text,
-        target_words=target_words,
-        order=order,
-        alphabet_size=alphabet_size,
-        word_distance_type=word_distance_type
-    )
-    features["file_name"] = os.path.basename(text_path)
-    return features
-
-
-def extract_with_timeout_wrapper(args):
-    return extract_with_timeout_worker(*args)
-
-
-def _run_with_result(func, args, return_dict):
-    return_dict["res"] = func(*args)
-
-def timeout_worker(func, args, timeout=300):
-    """Runs a function in a subprocess with timeout."""
-    with multiprocessing.Manager() as manager:
-        return_dict = manager.dict()
-        p = multiprocessing.Process(target=_run_with_result, args=(func, args, return_dict))
-        p.start()
-        p.join(timeout)
-        if p.is_alive():
-            p.terminate()
-            p.join()
-            return None
-        return return_dict.get("res", None)
-    
-def extract_missing_files(csv_path: str, source_dir: str, extractor: TextFeatureExtractor,
-                          target_words: set[str], order: int = 1, alphabet_size: int = 256,
-                          word_distance_type: str = "mean", batch_size: int = 50):
-    """
-    Finds files in `source_dir` missing from `csv_path` and extracts features for them in batches.
-    """
-    if os.path.exists(csv_path):
-        existing_df = pd.read_csv(csv_path)
-        extracted_files = set(existing_df['file_name'].dropna().unique())
-    else:
-        existing_df = pd.DataFrame()
-        extracted_files = set()
-
-    all_files = [
-        os.path.join(root, file)
-        for root, _, files in os.walk(source_dir)
-        for file in files if file.endswith(".txt")
-    ]
-    all_filenames = set(os.path.basename(path) for path in all_files)
-    missing_filenames = all_filenames - extracted_files
-
-    if not missing_filenames:
-        print("[INFO] No missing files found.")
-        return
-
-    print(f"[INFO] Found {len(missing_filenames)} missing files. Extracting now...")
-
-    filename_to_path = {os.path.basename(p): p for p in all_files}
-    missing_paths = [filename_to_path[f] for f in missing_filenames]
-
-    for batch_idx in range(0, len(missing_paths), batch_size):
-        batch = missing_paths[batch_idx:batch_idx + batch_size]
-        results = []
-
-        for path in tqdm(batch, desc=f"Extracting batch {batch_idx//batch_size+1}", unit="file"):
             try:
-                with open(path, 'r', encoding='utf-8', errors='ignore') as file:
-                    text = file.read()
-                features = extractor.extract(text, target_words, order, alphabet_size, word_distance_type)
-                features["file_name"] = os.path.basename(path)
-                results.append(features)
+                process = psutil.Process(os.getpid())
+                main_memory = process.memory_info().rss / 1024**3
+
+                children = process.children(recursive=True)
+                if children:
+                    print(f"[MEMORY] Main: {main_memory:.2f} GB", flush=True)
+                    for i, child in enumerate(children):
+                        try:
+                            child_memory = child.memory_info().rss / 1024**3
+                            print(f"[MEMORY] Worker {i+1}: {child_memory:.2f} GB", flush=True)
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            print(f"[MEMORY] Worker {i+1}: Finished", flush=True)
+                else:
+                    print(f"[MEMORY] Current memory usage: {main_memory:.2f} GB", flush=True)
             except Exception as e:
-                print(f"[ERROR] Failed to process {path}: {e}")
+                print(f"[MEMORY] Unable to get memory info: {e}", flush=True)
+            time.sleep(interval)
 
-        if results:
-            new_df = pd.DataFrame(results)
-            new_df = new_df.merge(extractor.file_info, on="file_name", how="left")
-            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-            combined_df.to_csv(csv_path, index=False)
-            existing_df = combined_df
-            print(f"[INFO] Appended {len(results)} records in batch {batch_idx//batch_size+1} to {csv_path}")
-        else:
-            print(f"[INFO] No new data extracted in batch {batch_idx//batch_size+1}")
+    threading.Thread(target=log_memory, daemon=True).start()
+    print(f"[MEMORY] Started memory logger with {interval}s interval", flush=True)
 
-        gc.collect()
+
+def log_worker_memory_distribution():
+    """Log current memory usage."""
+    try:
+        memory_gb = psutil.Process(os.getpid()).memory_info().rss / 1024**3
+        print(f"[MEMORY] Current memory usage: {memory_gb:.2f} GB", flush=True)
+    except Exception as e:
+        print(f"[MEMORY] Unable to get memory info: {e}", flush=True)
+
+
+def detect_memory_leaks(history_size=10):
+    """Log current memory usage."""
+    try:
+        memory_gb = psutil.Process(os.getpid()).memory_info().rss / 1024**3
+        print(f"[MEMORY] Current memory usage: {memory_gb:.2f} GB", flush=True)
+    except Exception as e:
+        print(f"[MEMORY] Unable to get memory info: {e}", flush=True)
+
+
+def save_memory_snapshot(filename_prefix="memory_snapshot"):
+    """Log current memory usage."""
+    try:
+        memory_gb = psutil.Process(os.getpid()).memory_info().rss / 1024**3
+        print(f"[MEMORY] Current memory usage: {memory_gb:.2f} GB", flush=True)
+    except Exception as e:
+        print(f"[MEMORY] Unable to get memory info: {e}", flush=True)
+    
+def check_system_limits():
+    """Check and log system resource limits."""
+    try:
+        # Check file descriptor limits
+        soft_fd, hard_fd = resource.getrlimit(resource.RLIMIT_NOFILE)
+        print(f"[DEBUG] File descriptor limits: soft={soft_fd}, hard={hard_fd}", flush=True)
+
+        # Check memory limits
+        try:
+            soft_mem, hard_mem = resource.getrlimit(resource.RLIMIT_AS)
+            print(f"[DEBUG] Virtual memory limits: soft={soft_mem/(1024**3):.1f}GB, hard={hard_mem/(1024**3):.1f}GB" if hard_mem != resource.RLIM_INFINITY else "[DEBUG] Virtual memory limits: unlimited", flush=True)
+        except (ValueError, OverflowError):
+            print(f"[DEBUG] Virtual memory limits: unlimited", flush=True)
+
+        # Check current file descriptor usage
+        process = psutil.Process()
+        num_fds = process.num_fds()
+        print(f"[DEBUG] Current file descriptors in use: {num_fds}", flush=True)
+
+        return True
+    except Exception as e:
+        print(f"[DEBUG] Error checking system limits: {e}", flush=True)
+        return False
+
+def setup_worker_error_handling():
+    """Set up comprehensive error handling for worker processes."""
+    def signal_handler(signum, frame):
+        print(f"[WORKER-ERROR] Worker process received signal {signum}: {signal.Signals(signum).name}", flush=True)
+        print(f"[WORKER-ERROR] Worker PID: {os.getpid()}, Frame: {frame.f_code.co_filename}:{frame.f_lineno}", flush=True)
+
+        # Log memory state at termination
+        try:
+            process = psutil.Process()
+            memory_gb = process.memory_info().rss / 1024**3
+            print(f"[WORKER-ERROR] Worker memory at termination: {memory_gb:.2f} GB", flush=True)
+        except:
+            pass
+
+        sys.exit(1)
+
+    # Register signal handlers for common termination signals
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    if hasattr(signal, 'SIGQUIT'):
+        signal.signal(signal.SIGQUIT, signal_handler)
+    if hasattr(signal, 'SIGKILL'):  # Note: SIGKILL cannot be caught, but we'll try
+        try:
+            signal.signal(signal.SIGKILL, signal_handler)
+        except OSError:
+            pass  # SIGKILL cannot be caught
+
+    # Set up logging to capture warnings
+    logging.basicConfig(level=logging.WARNING, format='[WORKER-%(levelname)s] %(message)s')
+
+    # Capture Python warnings
+    def warning_handler(message, category, filename, lineno, file=None, line=None):
+        print(f"[WORKER-WARNING] {category.__name__}: {message} at {filename}:{lineno}", flush=True)
+
+    warnings.showwarning = warning_handler
+
+def verify_pickle_data(serialized_models, serialized_reference_data):
+    """Verify that pickled data can be safely deserialized."""
+    try:
+        if serialized_models:
+            for order, serialized_model in serialized_models.items():
+                if not isinstance(serialized_model, bytes):
+                    raise TypeError(f"Model for order {order} is not bytes: {type(serialized_model)}")
+
+        if serialized_reference_data:
+            if not isinstance(serialized_reference_data, bytes):
+                raise TypeError(f"Reference data is not bytes: {type(serialized_reference_data)}")
+
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] Pickle data verification failed: {e}", flush=True)
+        return False
+
+def monitor_worker_initialization(timeout_seconds=60):
+    """Monitor worker initialization with timeout."""
+    start_time = time.time()
+    pid = os.getpid()
+
+    def timeout_handler(signum, frame):
+        elapsed = time.time() - start_time
+        print(f"[WORKER-TIMEOUT] Worker {pid} initialization timed out after {elapsed:.1f} seconds", flush=True)
+        print(f"[WORKER-TIMEOUT] Current frame: {frame.f_code.co_filename}:{frame.f_lineno}", flush=True)
+
+        # Log memory state at timeout
+        try:
+            process = psutil.Process()
+            memory_gb = process.memory_info().rss / 1024**3
+            print(f"[WORKER-TIMEOUT] Worker memory at timeout: {memory_gb:.2f} GB", flush=True)
+        except:
+            pass
+
+        sys.exit(1)
+
+    # Set up timeout alarm
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(timeout_seconds)
+
+    return start_time
+
+def clear_worker_timeout():
+    """Clear the worker initialization timeout alarm."""
+    signal.alarm(0)
+
+def initialize_worker_with_models(file_info_path, language, lowercase, target_words, serialized_models, serialized_reference_data, use_ncd=True):
+    """
+    Initialize worker process with pre-built serialized models to avoid expensive rebuilding.
+    Enhanced with comprehensive error handling and debugging.
+    """
+    global _global_extractor, _global_target_words, _global_reference_models, _global_reference_data
+
+    # Set up error handling first
+    setup_worker_error_handling()
+
+    # Monitor initialization with timeout
+    start_time = monitor_worker_initialization(timeout_seconds=120)  # 2 minutes timeout
+
+    try:
+        pid = os.getpid()
+        process = psutil.Process()
+        initial_memory = process.memory_info().rss / 1024**3
+
+        # Verify pickle data integrity
+        if not verify_pickle_data(serialized_models, serialized_reference_data):
+            raise ValueError("Pickle data verification failed")
+
+        # Deserialize reference models and data
+        reference_models = {}
+        reference_data = None
+
+        if serialized_models:
+            for order, serialized_model in serialized_models.items():
+                reference_models[order] = pickle.loads(serialized_model)
+
+        if serialized_reference_data:
+            reference_data = pickle.loads(serialized_reference_data)
+
+        # Create extractor with pre-built models
+        _global_extractor = TextFeatureExtractor(
+            file_info_path=file_info_path,
+            lang=language,
+            num_threads=1,  # Single thread per worker
+            lowercase=lowercase,
+            reference_text=None,  # Don't pass reference_text to avoid model rebuilding
+            prebuilt_models=reference_models,
+            prebuilt_reference_data=reference_data,
+            use_ncd=use_ncd
+        )
+
+        # Set global variables
+        _global_target_words = target_words
+        _global_reference_models = reference_models
+        _global_reference_data = reference_data
+
+        # Clear timeout
+        clear_worker_timeout()
+
+        return True
+
+    except Exception as e:
+        elapsed_time = time.time() - start_time
+        print(f"[WORKER-ERROR] Worker {os.getpid()} initialization failed after {elapsed_time:.1f} seconds: {e}", flush=True)
+        print(f"[WORKER-ERROR] Error type: {type(e).__name__}", flush=True)
+        traceback.print_exc()
+
+        # Log system state at failure
+        try:
+            process = psutil.Process()
+            memory_gb = process.memory_info().rss / 1024**3
+            num_fds = process.num_fds()
+            print(f"[WORKER-ERROR] Worker state at failure: {memory_gb:.2f} GB memory, {num_fds} file descriptors", flush=True)
+        except:
+            print(f"[WORKER-ERROR] Unable to get worker state at failure", flush=True)
+
+        # Clear timeout before re-raising
+        clear_worker_timeout()
+        raise
+
+# Legacy function for backward compatibility
+def initialize_worker(file_info_path, language, reference_text, lowercase, order, target_words):
+    """Legacy worker initialization - kept for backward compatibility."""
+    global _global_extractor, _global_target_words
+    try:
+        _global_extractor = TextFeatureExtractor(
+            file_info_path=file_info_path,
+            lang=language,
+            num_threads=1,  # Single thread per worker
+            lowercase=lowercase,
+            reference_text=reference_text,
+            order=order
+        )
+        _global_target_words = target_words
+        print(f"[INFO] Worker initialized successfully (legacy)", flush=True)
+    except Exception as e:
+        print(f"[ERROR] Worker initialization failed: {e}", flush=True)
+        traceback.print_exc()
+        raise
+
+
+def file_processor(args):
+    """Worker function that reuses global extractor instance with enhanced error handling."""
+    global _global_extractor, _global_target_words
+
+    file_path, order, alphabet_size, word_distance_type = args
+    pid = os.getpid()
+
+    try:
+        # Check if worker is properly initialized
+        if _global_extractor is None:
+            error_msg = f"[WORKER-ERROR] Worker {pid} not properly initialized - global extractor is None"
+            print(error_msg, flush=True)
+            return None
+
+        if _global_target_words is None:
+            print(f"[WORKER-WARNING] Worker {pid} has no target words", flush=True)
+
+
+        # Monitor memory before processing
+        try:
+            process = psutil.Process()
+            pre_memory = process.memory_info().rss / 1024**3
+            num_fds = process.num_fds()
+
+
+            if num_fds > 500:  # Warn if too many file descriptors
+                print(f"[WORKER-WARNING] Worker {pid} high FD usage: {num_fds} before processing {os.path.basename(file_path)}", flush=True)
+        except Exception as mem_e:
+            print(f"[WORKER-WARNING] Could not check pre-processing memory: {mem_e}", flush=True)
+            pre_memory = None
+
+        # Read file with error handling
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                text = file.read()
+
+            if not text:
+                print(f"[WORKER-WARNING] Empty file: {file_path}", flush=True)
+                return None
+
+            text_length = len(text)
+            if text_length > 10**7:  # Warn for very large files (>10MB)
+                print(f"[WORKER-WARNING] Large file: {os.path.basename(file_path)} ({text_length:,} characters)", flush=True)
+
+        except Exception as read_e:
+            print(f"[WORKER-ERROR] Failed to read file {file_path}: {read_e}", flush=True)
+            return None
+
+        # Extract features with timeout and error handling
+        try:
+            features = _global_extractor.extract(
+                text,
+                target_words=_global_target_words,
+                order=order,
+                alphabet_size=alphabet_size,
+                word_distance_type=word_distance_type,
+                use_ncd=_global_extractor.use_ncd
+            )
+
+            if not features:
+                print(f"[WORKER-WARNING] No features extracted from {file_path}", flush=True)
+                return None
+
+            features["file_name"] = os.path.basename(file_path)
+
+        except Exception as extract_e:
+            print(f"[WORKER-ERROR] Feature extraction failed for {file_path}: {extract_e}", flush=True)
+            print(f"[WORKER-ERROR] Error type: {type(extract_e).__name__}", flush=True)
+            traceback.print_exc()
+            return None
+
+        # Monitor memory after processing
+        try:
+            post_memory = process.memory_info().rss / 1024**3
+            if pre_memory is not None:
+                memory_delta = post_memory - pre_memory
+                if abs(memory_delta) > 0.5:  # Log significant memory changes
+                    print(f"[WORKER-MEMORY] Worker {pid} memory change: {memory_delta:+.2f} GB after processing {os.path.basename(file_path)}", flush=True)
+        except Exception as post_mem_e:
+            print(f"[WORKER-WARNING] Could not check post-processing memory: {post_mem_e}", flush=True)
+
+        # Explicit cleanup to reduce memory footprint
+        del text
+
+        return features
+
+    except Exception as e:
+        print(f"[WORKER-ERROR] Unexpected error in worker {pid} processing {file_path}: {e}", flush=True)
+        print(f"[WORKER-ERROR] Error type: {type(e).__name__}", flush=True)
+        traceback.print_exc()
+
+        # Log worker state at error
+        try:
+            process = psutil.Process()
+            memory_gb = process.memory_info().rss / 1024**3
+            num_fds = process.num_fds()
+            print(f"[WORKER-ERROR] Worker {pid} state at error: {memory_gb:.2f} GB memory, {num_fds} file descriptors", flush=True)
+        except:
+            print(f"[WORKER-ERROR] Unable to get worker {pid} state at error", flush=True)
+
+        return None
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract text features from file datasets.")
@@ -675,6 +1196,7 @@ def parse_args():
     parser.add_argument("--test_out", required=False, help="Output CSV for test features")
     parser.add_argument("--gutenberg", required=False, help="Directory containing Gutenberg text files")
     parser.add_argument("--gutenberg_out", required=False, help="Output CSV for Gutenberg features")
+    parser.add_argument("--gutenberg_info", required=False, help="Path to gutenberg metadata CSV file (if different from main file_info)")
     parser.add_argument("--target_words", required=True, help="Path to target_words.json")
     parser.add_argument("--lang", default="english", help="Language for stopword filtering and word lists")
     parser.add_argument("--order", type=int, default=1, help="Markov model order")
@@ -684,6 +1206,8 @@ def parse_args():
     parser.add_argument("--lowercase", action="store_true", help="Convert all text to lowercase before processing")
     parser.add_argument("--create_references", action="store_true", help="Create reference files from 5% of train/validation datasets")
     parser.add_argument("--reference_percentage", type=float, default=0.05, help="Percentage of files to use for reference")
+    parser.add_argument("--validation_reference_percentage", type=float, default=0.05, help="Percentage of validation files to use as reference for test/gutenberg")
+    parser.add_argument("--no-ncd", action="store_true", help="Disable NCD (Normalized Compression Distance) features for faster processing")
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -691,7 +1215,15 @@ if __name__ == "__main__":
     
     args = parse_args()
     
-    start_memory_logger(interval=300)
+    # Start enhanced memory logging with more frequent updates during feature extraction
+    start_memory_logger(interval=10)
+
+    print("[MEMORY] === INITIAL MEMORY STATE ===", flush=True)
+    # Create a temporary extractor just to log initial memory state
+    temp_extractor = TextFeatureExtractor(args.file_info, args.lang, 1, args.lowercase, order=args.order)
+    temp_extractor.log_memory_usage("Initial system state - ")
+    del temp_extractor
+    gc.collect()
 
     if args.target_words:
         with open(args.target_words, "r", encoding="utf-8") as f:
@@ -703,13 +1235,14 @@ if __name__ == "__main__":
     # Create reference files if requested
     reference_files = {}
     if args.create_references:
-        print("[INFO] Creating reference files...")
+        print("[INFO] Creating reference files...", flush=True)
 
         temp_extractor = TextFeatureExtractor(
             file_info_path=args.file_info,
             lang=args.lang,
             num_threads=args.threads,
-            lowercase=args.lowercase
+            lowercase=args.lowercase,
+            order=args.order
         )
 
         if args.train:
@@ -721,7 +1254,9 @@ if __name__ == "__main__":
             )
             reference_files['train'] = train_ref_text
 
-        if args.valid:
+        # Only create validation reference if we're actually processing validation data
+        # If validation dir is provided only for test/gutenberg reference, skip this
+        if args.valid and args.valid_out:
             valid_ref_text = temp_extractor.create_reference_file(
                 args.valid,
                 f"{args.valid}_reference.txt",
@@ -734,27 +1269,41 @@ if __name__ == "__main__":
     train_reference = reference_files.get('train', None)
     valid_reference = reference_files.get('valid', None)
 
-    # For test and gutenberg, use entire validation dataset as reference
-    test_reference = None
-    gutenberg_reference = None
-    if args.valid:
-        print("[INFO] Loading entire validation dataset as reference for test/gutenberg...")
-        temp_extractor = TextFeatureExtractor(
-            file_info_path=args.file_info,
-            lang=args.lang,
-            num_threads=args.threads,
-            lowercase=args.lowercase
-        )
 
-        # Create reference from entire validation dataset
+    def load_validation_reference(validation_dir, reference_percentage=0.05):
+        print(f"[INFO] Loading {reference_percentage*100:.1f}% of validation dataset as reference for test/gutenberg...", flush=True)
+        # Create cached reference from percentage of validation dataset
+        validation_reference_path = f"{validation_dir}_reference_{reference_percentage*100:.1f}pct.txt"
+
+        if os.path.exists(validation_reference_path):
+            print(f"Loading cached validation reference: {validation_reference_path}", flush=True)
+            try:
+                with open(validation_reference_path, 'r', encoding='utf-8') as f:
+                    return f.read()
+            except Exception as e:
+                print(f"Error loading cached reference: {e}. Creating new one...", flush=True)
+
+        if not os.path.exists(validation_dir):
+            print(f"[ERROR] Validation directory {validation_dir} doesn't exist", flush=True)
+            return None
+
+        print("Creating validation reference from all validation files...", flush=True)
         all_valid_files = []
-        for root, _, files in os.walk(args.valid):
+        for root, _, files in os.walk(validation_dir):
             for file in files:
                 if file.endswith(".txt"):
                     all_valid_files.append(os.path.join(root, file))
 
+        # Select percentage of files for reference
+        import random
+        random.seed(42)  # For reproducible results
+        num_files_to_use = max(1, int(len(all_valid_files) * reference_percentage))
+        selected_files = random.sample(all_valid_files, num_files_to_use)
+
+        print(f"Selected {num_files_to_use} out of {len(all_valid_files)} validation files ({reference_percentage*100:.1f}%)", flush=True)
+
         valid_full_text = ""
-        for file_path in tqdm(all_valid_files, desc="Loading validation reference"):
+        for file_path in tqdm(selected_files, desc="Loading validation reference"):
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     text = f.read()
@@ -762,23 +1311,35 @@ if __name__ == "__main__":
                         text = text.lower()
                     valid_full_text += text + "\n"
             except Exception as e:
-                print(f"Error reading {file_path}: {e}")
+                print(f"Error reading {file_path}: {e}", flush=True)
 
-        test_reference = valid_full_text
-        gutenberg_reference = valid_full_text
-        print(f"Validation reference text length: {len(valid_full_text):,} characters")
+        # Save the reference for future use
+        print(f"Saving validation reference to: {validation_reference_path}", flush=True)
+        with open(validation_reference_path, 'w', encoding='utf-8') as f:
+            f.write(valid_full_text)
+        print(f"Validation reference text length: {len(valid_full_text):,} characters", flush=True)
+        return valid_full_text
 
-    if args.train and args.valid and args.test:
-        global_alphabet_size = TextFeatureExtractor(args.file_info, args.lang, args.threads, args.lowercase).compute_global_alphabet_size([args.train, args.valid, args.test])
-    elif args.gutenberg:
-        global_alphabet_size = TextFeatureExtractor(args.file_info, args.lang, args.threads, args.lowercase).compute_global_alphabet_size([args.gutenberg])
+    # Initialize as None - will only be loaded when actually needed
+    test_reference = None
+    gutenberg_reference = None
+
+    # Define validation reference path for checking existence
+    validation_reference_path = f"{args.valid}_reference_{args.validation_reference_percentage*100:.1f}pct.txt" if args.valid else f"../Dataset/Sorted_texts_trimmed/validation_reference_{args.validation_reference_percentage*100:.1f}pct.txt"
+
+    # Use hardcoded alphabet size of 69 for speed (as requested)
+    global_alphabet_size = 69
+    print(f"Using hardcoded alphabet size: {global_alphabet_size}")
+
     if args.train:
         train_extractor = TextFeatureExtractor(
             file_info_path=args.file_info,
             lang=args.lang,
             num_threads=args.threads,
             lowercase=args.lowercase,
-            reference_text=train_reference
+            reference_text=train_reference,
+            order=args.order,
+            use_ncd=not getattr(args, 'no_ncd', False)
         )
         exclude_csv = f"{args.train}_reference_files.csv" if args.create_references else None
         train_extractor.extract_features_from_directory(
@@ -786,13 +1347,15 @@ if __name__ == "__main__":
             global_alphabet_size, args.word_distance, args.chunk_size, exclude_csv
         )
 
-    if args.valid:
+    if args.valid and args.valid_out:
         valid_extractor = TextFeatureExtractor(
             file_info_path=args.file_info,
             lang=args.lang,
             num_threads=args.threads,
             lowercase=args.lowercase,
-            reference_text=valid_reference
+            reference_text=valid_reference,
+            order=args.order,
+            use_ncd=not getattr(args, 'no_ncd', False)
         )
         exclude_csv = f"{args.valid}_reference_files.csv" if args.create_references else None
         valid_extractor.extract_features_from_directory(
@@ -801,12 +1364,23 @@ if __name__ == "__main__":
         )
 
     if args.test:
+        # Load validation reference if available (either from current run or previous run)
+        validation_dir = args.valid
+        validation_reference_path = f"{validation_dir}_reference_{args.validation_reference_percentage*100:.1f}pct.txt"
+        if args.valid or os.path.exists(validation_reference_path):
+            print("[INFO] Loading validation reference for test processing...", flush=True)
+            test_reference = load_validation_reference(validation_dir, args.validation_reference_percentage)
+        else:
+            print("[WARNING] No validation reference available for test processing", flush=True)
+            test_reference = None
         test_extractor = TextFeatureExtractor(
             file_info_path=args.file_info,
             lang=args.lang,
             num_threads=args.threads,
             lowercase=args.lowercase,
-            reference_text=test_reference
+            reference_text=test_reference,
+            order=args.order,
+            use_ncd=not getattr(args, 'no_ncd', False)
         )
         test_extractor.extract_features_from_directory(
             args.test, args.test_out, target_words, args.order,
@@ -814,22 +1388,42 @@ if __name__ == "__main__":
         )
 
     if args.gutenberg:
+        # Load validation reference if available (either from current run or previous run)
+        validation_dir = args.valid
+        validation_reference_path = f"{validation_dir}_reference_{args.validation_reference_percentage*100:.1f}pct.txt"
+        if args.valid or os.path.exists(validation_reference_path):
+            print("[INFO] Loading validation reference for gutenberg processing...", flush=True)
+            gutenberg_reference = load_validation_reference(validation_dir, args.validation_reference_percentage)
+        else:
+            print("[WARNING] No validation reference available for gutenberg processing", flush=True)
+            gutenberg_reference = None
+        # Use separate gutenberg metadata file if provided, otherwise use main file_info
+        gutenberg_info_path = args.gutenberg_info if args.gutenberg_info else args.file_info
         gutenberg_extractor = TextFeatureExtractor(
-            file_info_path=args.file_info,
+            file_info_path=gutenberg_info_path,
             lang=args.lang,
             num_threads=args.threads,
             lowercase=args.lowercase,
-            reference_text=gutenberg_reference
+            reference_text=gutenberg_reference,
+            order=args.order,
+            use_ncd=not getattr(args, 'no_ncd', False)
         )
         gutenberg_extractor.extract_features_from_directory(
             args.gutenberg, args.gutenberg_out, target_words, args.order,
             global_alphabet_size, args.word_distance, args.chunk_size
         )
 
-    
+    print("[INFO] Feature extraction completed for all datasets...", flush=True)
 
-    
-    print("[INFO] Feature extraction completed for all datasets.")
-    print("[INFO] Memory usage at the end of the script:")
-    extractor.log_mem("Final ")
-    print("[INFO] All done!")
+    # Final memory state logging
+    print("[MEMORY] === FINAL MEMORY STATE ===", flush=True)
+    if 'temp_extractor' in locals():
+        temp_extractor = locals()['temp_extractor']
+    else:
+        temp_extractor = TextFeatureExtractor(args.file_info, args.lang, 1, args.lowercase, order=args.order)
+    temp_extractor.log_memory_usage("Final processing state - ")
+    save_memory_snapshot()
+    del temp_extractor
+    gc.collect()
+
+    print("[INFO] All done!", flush=True)

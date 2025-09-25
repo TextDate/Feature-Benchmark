@@ -226,3 +226,5 @@ Logs/
 logs/
 bert*
 NN*
+.claude
+Extracted_features/

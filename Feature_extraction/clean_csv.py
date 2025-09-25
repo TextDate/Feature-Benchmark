@@ -154,14 +154,14 @@ def clean_missing_values_gutenberg(gutenberg_csv: str, output_gutenberg_csv: str
     print(f"Updated CSV saved to: {output_gutenberg_csv}", flush=True)
 
 
-def check_and_fix_missing_decades(csv_path: str, text_info_path: str):
+def check_and_fix_missing_temporal_data(csv_path: str, text_info_path: str):
     """
-    Checks for missing or invalid 'decade' values in a feature CSV and fills them
-    using a reference text_info CSV. Updates the file in-place.
+    Checks for missing or invalid 'year', 'decade', and 'century' values in a feature CSV
+    and fills them using a reference text_info CSV. Updates the file in-place.
 
     Args:
         csv_path (str): Path to the feature CSV.
-        text_info_path (str): Path to the text_info CSV with 'file_name' and 'decade'.
+        text_info_path (str): Path to the text_info CSV with 'file_name', 'year', 'decade', and 'century'.
     """
     df = pd.read_csv(csv_path, na_values=["", "None"])
 
@@ -169,32 +169,49 @@ def check_and_fix_missing_decades(csv_path: str, text_info_path: str):
     if "file_name" not in df.columns:
         print("The CSV must contain a 'file_name' column.", flush=True)
         return
-    
 
-    if "decade" not in df.columns:
-        df["decade"] = None
+    # Define temporal columns to fix
+    temporal_columns = ["year", "decade", "century"]
 
+    # Load reference data
+    available_columns = ["file_name"] + [col for col in temporal_columns
+                                        if col in pd.read_csv(text_info_path, nrows=0).columns]
+    text_info = pd.read_csv(text_info_path, na_values=["", "None"])[available_columns]
 
-    df["decade"] = pd.to_numeric(df["decade"], errors="coerce")
-    missing_mask = df["decade"].isna() | ~df["decade"].apply(lambda x: float(x).is_integer())
+    # Process each temporal column
+    for col in temporal_columns:
+        # Add column if it doesn't exist
+        if col not in df.columns:
+            df[col] = None
 
-    if not missing_mask.any():
-        print("All rows have valid 'decade' values.", flush=True)
-        return
+        # Convert to numeric and find missing values
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+        missing_mask = df[col].isna()
 
-    print(f"Found {missing_mask.sum()} rows with missing or invalid 'decade'. Attempting to fix...", flush=True)
+        if col == "decade":
+            # For decade, also check for non-integer values
+            missing_mask = missing_mask | ~df[col].apply(lambda x: pd.isna(x) or float(x).is_integer())
 
-    text_info = pd.read_csv(text_info_path, na_values=["", "None"])[["file_name", "decade"]]
-    text_dict = dict(zip(text_info["file_name"], text_info["decade"]))
+        if not missing_mask.any():
+            print(f"All rows have valid '{col}' values.", flush=True)
+            continue
 
-    df.loc[missing_mask, "decade"] = df.loc[missing_mask, "file_name"].map(text_dict)
+        print(f"Found {missing_mask.sum()} rows with missing or invalid '{col}'. Attempting to fix...", flush=True)
 
-    still_missing = df[df["decade"].isna()]
-    if not still_missing.empty:
-        print(f"Could not fix {len(still_missing)} rows. They are still missing 'decade':", flush=True)
-        print(still_missing[["file_name"]])
-    else:
-        print("Successfully fixed all missing 'decade' values.", flush=True)
+        # Fix missing values if reference data is available
+        if col in text_info.columns:
+            col_dict = dict(zip(text_info["file_name"], text_info[col]))
+            df.loc[missing_mask, col] = df.loc[missing_mask, "file_name"].map(col_dict)
+
+            # Check what's still missing
+            still_missing = df[df[col].isna()]
+            if not still_missing.empty:
+                print(f"Could not fix {len(still_missing)} rows. They are still missing '{col}':", flush=True)
+                print(still_missing[["file_name"]])
+            else:
+                print(f"Successfully fixed all missing '{col}' values.", flush=True)
+        else:
+            print(f"'{col}' column not found in reference file {text_info_path}", flush=True)
 
     df.to_csv(csv_path, index=False)
     print(f"Updated CSV saved to: {csv_path}", flush=True)
@@ -205,7 +222,8 @@ def check_and_fix_missing_decades(csv_path: str, text_info_path: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Replace None values in target word features with max values")
     parser.add_argument("--text_info", type=str, required=True, help="Path to the text information CSV file")
-    
+    parser.add_argument("--gutenberg_text_info", type=str, required=False, help="Path to the gutenberg text information CSV file (if different from main text_info)")
+
     parser.add_argument("--input_train_csv", type=str, required=False, help="Path to the input training CSV file")
     parser.add_argument("--input_validation_csv", type=str, required=False, help="Path to the input validation CSV file")
     parser.add_argument("--input_test_csv", type=str, required=False, help="Path to the input test CSV file")
@@ -222,13 +240,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
        
     if args.input_train_csv:
-        check_and_fix_missing_decades(args.input_train_csv, args.text_info)
-    if args.input_validation_csv:    
-        check_and_fix_missing_decades(args.input_validation_csv, args.text_info)
+        check_and_fix_missing_temporal_data(args.input_train_csv, args.text_info)
+    if args.input_validation_csv:
+        check_and_fix_missing_temporal_data(args.input_validation_csv, args.text_info)
     if args.input_test_csv:
-        check_and_fix_missing_decades(args.input_test_csv, args.text_info)
+        check_and_fix_missing_temporal_data(args.input_test_csv, args.text_info)
     if args.input_gutenberg_csv:
-        check_and_fix_missing_decades(args.input_gutenberg_csv, args.text_info)
+        gutenberg_info = args.gutenberg_text_info if args.gutenberg_text_info else args.text_info
+        check_and_fix_missing_temporal_data(args.input_gutenberg_csv, gutenberg_info)
 
 
     with open(args.target_words_json, "r", encoding="utf-8") as f:
@@ -252,7 +271,8 @@ if __name__ == "__main__":
         )
         
     if args.input_gutenberg_csv and args.output_gutenberg_csv:
+        gutenberg_info = args.gutenberg_text_info if args.gutenberg_text_info else args.text_info
         clean_missing_values_gutenberg(
-            args.input_gutenberg_csv, args.output_gutenberg_csv, args.text_info
+            args.input_gutenberg_csv, args.output_gutenberg_csv, gutenberg_info
         )
     
