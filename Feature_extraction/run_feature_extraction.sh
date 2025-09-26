@@ -4,7 +4,7 @@
 #SBATCH --error=logs/feature_extraction_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=16
 #SBATCH --mem=230GB
 #SBATCH --partition=cpu
 
@@ -47,17 +47,18 @@ OUTPUT_DIR="Extracted_features"
 # Processing parameters optimized for HPC
 ORDER=""  # Set to empty string "" for order 1 only, or specify order (e.g., 2)
 CHUNK_SIZE=1000  # Smaller chunks for memory efficiency
-THREADS=$SLURM_CPUS_PER_TASK
+THREADS=$SLURM_CPUS_PER_TASK  # Threads for training/validation phases (heavy computation)
+INFERENCE_THREADS=4  # Threads for test/gutenberg phases (inference/testing) - set to different value if desired
 WORD_DISTANCE="mean"
-REFERENCE_PERCENTAGE=0.01
+REFERENCE_PERCENTAGE=0.05
 VALIDATION_REFERENCE_PERCENTAGE=0.5  # Percentage of validation dataset to use as reference for test/gutenberg
 USE_NCD=false  # Set to true to enable NCD features (slower), false to disable (faster)
 
 # Dataset processing flags - set to true to process, false to skip
-DO_TRAIN=false
-DO_VALID=false
-DO_TEST=false
-DO_GUTENBERG=false
+DO_TRAIN=true
+DO_VALID=true
+DO_TEST=true
+DO_GUTENBERG=true
 
 # ==================== FUNCTIONS ====================
 
@@ -81,7 +82,8 @@ run_feature_extraction() {
 
     log "Starting feature extraction..."
     log "Timestamp: $timestamp"
-    log "Using $THREADS CPU cores"
+    log "Using $THREADS CPU cores for training/validation phases"
+    log "Using $INFERENCE_THREADS CPU cores for test/gutenberg phases"
 
     # Output files with timestamp
     local train_out="$OUTPUT_DIR/train_features_${timestamp}.csv"
@@ -156,6 +158,7 @@ run_feature_extraction() {
     cmd="$cmd --word_distance '$WORD_DISTANCE'"
     cmd="$cmd --chunk_size '$CHUNK_SIZE'"
     cmd="$cmd --threads '$THREADS'"
+    cmd="$cmd --inference_threads '$INFERENCE_THREADS'"
     cmd="$cmd --create_references"
     cmd="$cmd --reference_percentage '$REFERENCE_PERCENTAGE'"
     cmd="$cmd --validation_reference_percentage '$VALIDATION_REFERENCE_PERCENTAGE'"
@@ -181,67 +184,62 @@ run_feature_extraction() {
     fi
 
 
-SLURM Job Information - $timestamp
-==================================
-Job ID: $SLURM_JOB_ID
-Job Name: $SLURM_JOB_NAME
-Node: $SLURM_NODELIST
-CPUs: $SLURM_CPUS_PER_TASK
-Memory: ${SLURM_MEM_PER_NODE}MB
-Partition: $SLURM_JOB_PARTITION
-
-Feature Extraction Parameters:
-==============================
-File Info: $FILE_INFO
-Target Words: $TARGET_WORDS
-Language: $LANG
-Markov Order: ${ORDER:-"1 only"}
-Chunk Size: $CHUNK_SIZE
-Threads: $THREADS
-Word Distance: $WORD_DISTANCE
-Reference Percentage: $REFERENCE_PERCENTAGE
-Validation Reference Percentage: $VALIDATION_REFERENCE_PERCENTAGE
-Use NCD: $USE_NCD
-Lowercase: Yes
-Create References: Yes
-
-Dataset Processing Status:
-=========================
-Train: $DO_TRAIN
-Valid: $DO_VALID
-Test: $DO_TEST
-Gutenberg: $DO_GUTENBERG
-
-Dataset Directories:
-===================
-Train: $TRAIN_DIR
-Valid: $VALID_DIR
-Test: $TEST_DIR
-Gutenberg: $GUTENBERG_DIR
-
-Output Files:
-=============
-Train: $train_out
-Valid: $valid_out
-Test: $test_out
-Gutenberg: $gutenberg_out
-
-Features Extracted:
-==================
-- Compression ratios (order 1${ORDER:+ and $ORDER})
-- NRC with external reference models
-- NCD (Normalized Compression Distance)
-- Entropy ratios
-- Linguistic features (readability, word lengths, etc.)
-- Target word distance features
-
-Reference Strategy:
-==================
-- Train/Valid: Use 1% of own files as reference
-- Test/Gutenberg: Use entire validation dataset as reference
-
-Start Time: $(date)
-EOF
+log "==================== SLURM JOB INFO ===================="
+log "SLURM Job Information - $(date)"
+log "Job ID: $SLURM_JOB_ID"
+log "Job Name: $SLURM_JOB_NAME"
+log "Node: $SLURM_NODELIST"
+log "CPUs: $SLURM_CPUS_PER_TASK"
+log "Memory: ${SLURM_MEM_PER_NODE}MB"
+log "Partition: $SLURM_JOB_PARTITION"
+log ""
+log "Feature Extraction Parameters:"
+log "File Info: $FILE_INFO"
+log "Target Words: $TARGET_WORDS"
+log "Language: $LANG"
+log "Markov Order: ${ORDER:-1 only}"
+log "Chunk Size: $CHUNK_SIZE"
+log "Training/Validation Threads: $THREADS"
+log "Test/Gutenberg Threads: $INFERENCE_THREADS"
+log "Word Distance: $WORD_DISTANCE"
+log "Reference Percentage: $REFERENCE_PERCENTAGE"
+log "Validation Reference Percentage: $VALIDATION_REFERENCE_PERCENTAGE"
+log "Use NCD: $USE_NCD"
+log "Lowercase: Yes"
+log "Create References: Yes"
+log ""
+log "Dataset Processing Status:"
+log "Train: $DO_TRAIN"
+log "Valid: $DO_VALID"
+log "Test: $DO_TEST"
+log "Gutenberg: $DO_GUTENBERG"
+log ""
+log "Dataset Directories:"
+log "Train: $TRAIN_DIR"
+log "Valid: $VALID_DIR"
+log "Test: $TEST_DIR"
+log "Gutenberg: $GUTENBERG_DIR"
+log ""
+log "Output Files:"
+log "Train: $train_out"
+log "Valid: $valid_out"
+log "Test: $test_out"
+log "Gutenberg: $gutenberg_out"
+log ""
+log "Features Extracted:"
+log "- Compression ratios (order 1$([ -n "$ORDER" ] && echo " and $ORDER" || echo ""))"
+log "- NRC with external reference models"
+log "- NCD (Normalized Compression Distance)"
+log "- Entropy ratios"
+log "- Linguistic features (readability, word lengths, etc.)"
+log "- Target word distance features"
+log ""
+log "Reference Strategy:"
+log "- Train/Valid: Use 1% of own files as reference"
+log "- Test/Gutenberg: Use entire validation dataset as reference"
+log ""
+log "Start Time: $(date)"
+log "=========================================="
 
     return $exit_code
 }
@@ -307,7 +305,7 @@ main() {
     # Set up cleanup trap
     trap cleanup EXIT
 
-    log "Starting Enhanced Feature Extraction Pipeline on IEETA HPC"
+    log "Starting Feature Extraction Pipeline on IEETA HPC"
     log "==========================================================="
 
     create_directories
