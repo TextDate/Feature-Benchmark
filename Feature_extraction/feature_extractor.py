@@ -758,14 +758,40 @@ class TextFeatureExtractor:
             print(f"No text files found in {source_directory}")
             return
 
-        # Calculate number of files to use
-        num_files = max(1, int(len(all_files) * percentage))
+        # Try to create decade-balanced sample using metadata
+        metadata_dict = dict(zip(self.file_info['file_name'], self.file_info['decade']))
 
-        # Randomly select files
-        random.seed(42)  # For reproducibility
-        selected_files = random.sample(all_files, num_files)
+        # Group files by decade
+        files_by_decade = defaultdict(list)
+        for file_path in all_files:
+            file_name = os.path.basename(file_path)
+            if file_name in metadata_dict:
+                decade = metadata_dict[file_name]
+                files_by_decade[decade].append(file_path)
 
-        print(f"Creating reference from {num_files} files ({percentage*100:.1f}% of {len(all_files)} total files)", flush=True)
+        if files_by_decade:
+            print(f"Creating DECADE-BALANCED reference from {percentage*100:.1f}% of files in each decade:", flush=True)
+            for decade, files in files_by_decade.items():
+                print(f"  {decade}s: {len(files)} files available")
+
+            # Sample percentage from each decade
+            selected_files = []
+            random.seed(42)  # For reproducibility
+
+            for decade, files in files_by_decade.items():
+                num_to_select = max(1, int(len(files) * percentage))
+                decade_selected = random.sample(files, min(num_to_select, len(files)))
+                selected_files.extend(decade_selected)
+                print(f"  Selected {len(decade_selected)} files from {decade}s ({percentage*100:.1f}%)")
+
+            print(f"Total: {len(selected_files)} files selected (decade-balanced)", flush=True)
+        else:
+            print(f"[WARNING] Could not create decade-balanced sample, using random sampling", flush=True)
+            # Fallback to random sampling if metadata grouping fails
+            num_files = max(1, int(len(all_files) * percentage))
+            random.seed(42)  # For reproducibility
+            selected_files = random.sample(all_files, num_files)
+            print(f"Creating reference from {num_files} files ({percentage*100:.1f}% of {len(all_files)} total files)", flush=True)
 
         # Concatenate selected files
         reference_text = ""
@@ -1202,7 +1228,8 @@ def parse_args():
     parser.add_argument("--order", type=int, default=1, help="Markov model order")
     parser.add_argument("--word_distance", choices=["mean", "median"], default="mean", help="Distance type for target words")
     parser.add_argument("--chunk_size", type=int, default=2000, help="Number of files to process in each chunk")
-    parser.add_argument("--threads", type=int, default=8, help="Number of parallel threads")
+    parser.add_argument("--threads", type=int, default=8, help="Number of parallel threads for training/validation phases")
+    parser.add_argument("--inference_threads", type=int, default=None, help="Number of parallel threads for test/gutenberg phases (defaults to --threads value if not specified)")
     parser.add_argument("--lowercase", action="store_true", help="Convert all text to lowercase before processing")
     parser.add_argument("--create_references", action="store_true", help="Create reference files from 5% of train/validation datasets")
     parser.add_argument("--reference_percentage", type=float, default=0.05, help="Percentage of files to use for reference")
@@ -1214,7 +1241,14 @@ if __name__ == "__main__":
     multiprocessing.set_start_method("spawn", force=True)
     
     args = parse_args()
-    
+
+    # Set default inference_threads to threads if not specified
+    if args.inference_threads is None:
+        args.inference_threads = args.threads
+
+    print(f"[THREADING] Training/Validation phases will use {args.threads} threads", flush=True)
+    print(f"[THREADING] Test/Gutenberg phases will use {args.inference_threads} threads", flush=True)
+
     # Start enhanced memory logging with more frequent updates during feature extraction
     start_memory_logger(interval=10)
 
@@ -1248,7 +1282,7 @@ if __name__ == "__main__":
         if args.train:
             train_ref_text = temp_extractor.create_reference_file(
                 args.train,
-                f"{args.train}_reference.txt",
+                f"{args.train}_reference_balanced.txt",
                 f"{args.train}_reference_files.csv",
                 args.reference_percentage
             )
@@ -1259,7 +1293,7 @@ if __name__ == "__main__":
         if args.valid and args.valid_out:
             valid_ref_text = temp_extractor.create_reference_file(
                 args.valid,
-                f"{args.valid}_reference.txt",
+                f"{args.valid}_reference_balanced.txt",
                 f"{args.valid}_reference_files.csv",
                 args.reference_percentage
             )
@@ -1271,12 +1305,12 @@ if __name__ == "__main__":
 
 
     def load_validation_reference(validation_dir, reference_percentage=0.05):
-        print(f"[INFO] Loading {reference_percentage*100:.1f}% of validation dataset as reference for test/gutenberg...", flush=True)
-        # Create cached reference from percentage of validation dataset
-        validation_reference_path = f"{validation_dir}_reference_{reference_percentage*100:.1f}pct.txt"
+        print(f"[INFO] Loading {reference_percentage*100:.1f}% of validation dataset as DECADE-BALANCED reference for test/gutenberg...", flush=True)
+        # Create cached reference from percentage of validation dataset (decade-balanced)
+        validation_reference_path = f"{validation_dir}_reference_balanced_{reference_percentage*100:.1f}pct.txt"
 
         if os.path.exists(validation_reference_path):
-            print(f"Loading cached validation reference: {validation_reference_path}", flush=True)
+            print(f"Loading cached decade-balanced validation reference: {validation_reference_path}", flush=True)
             try:
                 with open(validation_reference_path, 'r', encoding='utf-8') as f:
                     return f.read()
@@ -1287,23 +1321,83 @@ if __name__ == "__main__":
             print(f"[ERROR] Validation directory {validation_dir} doesn't exist", flush=True)
             return None
 
-        print("Creating validation reference from all validation files...", flush=True)
+        print("Creating decade-balanced validation reference from validation files...", flush=True)
+
+        # Get all validation files
         all_valid_files = []
         for root, _, files in os.walk(validation_dir):
             for file in files:
                 if file.endswith(".txt"):
                     all_valid_files.append(os.path.join(root, file))
 
-        # Select percentage of files for reference
-        import random
-        random.seed(42)  # For reproducible results
-        num_files_to_use = max(1, int(len(all_valid_files) * reference_percentage))
-        selected_files = random.sample(all_valid_files, num_files_to_use)
+        if not all_valid_files:
+            print(f"[ERROR] No .txt files found in {validation_dir}", flush=True)
+            return None
 
-        print(f"Selected {num_files_to_use} out of {len(all_valid_files)} validation files ({reference_percentage*100:.1f}%)", flush=True)
+        print(f"Found {len(all_valid_files)} validation files", flush=True)
+
+        # Try to load file info to get decade information
+        # Look for metadata file in parent directory structure
+        metadata_file = None
+        search_dir = validation_dir
+        for _ in range(3):  # Search up to 3 levels up
+            potential_metadata = os.path.join(search_dir, "balanced_dataset_metadata.csv")
+            if os.path.exists(potential_metadata):
+                metadata_file = potential_metadata
+                break
+            search_dir = os.path.dirname(search_dir)
+
+        if not metadata_file:
+            print("[WARNING] Could not find metadata file, falling back to random sampling")
+            # Fallback to original random sampling if no metadata found
+            import random
+            random.seed(42)  # For reproducible results
+            num_files_to_use = max(1, int(len(all_valid_files) * reference_percentage))
+            selected_files = random.sample(all_valid_files, num_files_to_use)
+        else:
+            # Load metadata and create decade-balanced sample
+            print(f"Loading metadata from: {metadata_file}", flush=True)
+            try:
+                metadata_df = pd.read_csv(metadata_file)
+                if 'file_name' not in metadata_df.columns or 'decade' not in metadata_df.columns:
+                    raise ValueError("Metadata file must contain 'file_name' and 'decade' columns")
+
+                # Group files by decade
+                files_by_decade = defaultdict(list)
+                metadata_dict = dict(zip(metadata_df['file_name'], metadata_df['decade']))
+
+                for file_path in all_valid_files:
+                    file_name = os.path.basename(file_path)
+                    if file_name in metadata_dict:
+                        decade = metadata_dict[file_name]
+                        files_by_decade[decade].append(file_path)
+
+                print(f"Files grouped by decade:")
+                for decade, files in files_by_decade.items():
+                    print(f"  {decade}s: {len(files)} files")
+
+                # Sample reference_percentage from each decade
+                selected_files = []
+                import random
+                random.seed(42)  # For reproducible results
+
+                for decade, files in files_by_decade.items():
+                    num_to_select = max(1, int(len(files) * reference_percentage))
+                    decade_selected = random.sample(files, min(num_to_select, len(files)))
+                    selected_files.extend(decade_selected)
+                    print(f"  Selected {len(decade_selected)} files from {decade}s ({reference_percentage*100:.1f}%)")
+
+            except Exception as e:
+                print(f"[WARNING] Error processing metadata file: {e}, falling back to random sampling")
+                import random
+                random.seed(42)
+                num_files_to_use = max(1, int(len(all_valid_files) * reference_percentage))
+                selected_files = random.sample(all_valid_files, num_files_to_use)
+
+        print(f"Selected {len(selected_files)} out of {len(all_valid_files)} validation files for decade-balanced reference", flush=True)
 
         valid_full_text = ""
-        for file_path in tqdm(selected_files, desc="Loading validation reference"):
+        for file_path in tqdm(selected_files, desc="Loading decade-balanced validation reference"):
             try:
                 with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                     text = f.read()
@@ -1314,10 +1408,10 @@ if __name__ == "__main__":
                 print(f"Error reading {file_path}: {e}", flush=True)
 
         # Save the reference for future use
-        print(f"Saving validation reference to: {validation_reference_path}", flush=True)
+        print(f"Saving decade-balanced validation reference to: {validation_reference_path}", flush=True)
         with open(validation_reference_path, 'w', encoding='utf-8') as f:
             f.write(valid_full_text)
-        print(f"Validation reference text length: {len(valid_full_text):,} characters", flush=True)
+        print(f"Decade-balanced validation reference text length: {len(valid_full_text):,} characters", flush=True)
         return valid_full_text
 
     # Initialize as None - will only be loaded when actually needed
@@ -1332,6 +1426,7 @@ if __name__ == "__main__":
     print(f"Using hardcoded alphabet size: {global_alphabet_size}")
 
     if args.train:
+        print(f"[TRAIN] Creating training extractor with {args.threads} threads", flush=True)
         train_extractor = TextFeatureExtractor(
             file_info_path=args.file_info,
             lang=args.lang,
@@ -1348,6 +1443,7 @@ if __name__ == "__main__":
         )
 
     if args.valid and args.valid_out:
+        print(f"[VALID] Creating validation extractor with {args.threads} threads", flush=True)
         valid_extractor = TextFeatureExtractor(
             file_info_path=args.file_info,
             lang=args.lang,
@@ -1373,10 +1469,11 @@ if __name__ == "__main__":
         else:
             print("[WARNING] No validation reference available for test processing", flush=True)
             test_reference = None
+        print(f"[TEST] Creating test extractor with {args.inference_threads} threads (inference phase)", flush=True)
         test_extractor = TextFeatureExtractor(
             file_info_path=args.file_info,
             lang=args.lang,
-            num_threads=args.threads,
+            num_threads=args.inference_threads,
             lowercase=args.lowercase,
             reference_text=test_reference,
             order=args.order,
@@ -1399,10 +1496,11 @@ if __name__ == "__main__":
             gutenberg_reference = None
         # Use separate gutenberg metadata file if provided, otherwise use main file_info
         gutenberg_info_path = args.gutenberg_info if args.gutenberg_info else args.file_info
+        print(f"[GUTENBERG] Creating gutenberg extractor with {args.inference_threads} threads (inference phase)", flush=True)
         gutenberg_extractor = TextFeatureExtractor(
             file_info_path=gutenberg_info_path,
             lang=args.lang,
-            num_threads=args.threads,
+            num_threads=args.inference_threads,
             lowercase=args.lowercase,
             reference_text=gutenberg_reference,
             order=args.order,
