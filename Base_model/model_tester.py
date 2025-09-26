@@ -16,7 +16,6 @@ import seaborn as sns
 
 def load_test_data(test_file, target_col, drop_cols, label_encoder, feature_names, use_centuries, exclude_centuries):
     df = pd.read_csv(test_file)
-    df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors='ignore')
 
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found in test file.")
@@ -31,8 +30,11 @@ def load_test_data(test_file, target_col, drop_cols, label_encoder, feature_name
         removed = original_len - len(df)
         print(f"Excluded centuries: {exclude_centuries} ({removed} samples removed)", flush=True)
 
-    X = df.drop(columns=[target_col])
+    # Extract target column before dropping it
     y = df[target_col]
+    df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors='ignore')
+
+    X = df.drop(columns=[target_col], errors='ignore')
 
     X = X[feature_names]
     y_encoded = label_encoder.transform(y)

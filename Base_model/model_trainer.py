@@ -57,15 +57,17 @@ def load_data(train_file, val_file, target_col, drop_cols, use_smote, use_tomek,
         df_val = df_val[~df_val["decade"].astype(int).isin(exclude_decades)]
         print(f"Excluded decades: {exclude_decades}", flush=True)
 
+    # Extract target columns before dropping them
+    y_train_df = df_train[[target_col]]
+    y_val_df = df_val[[target_col]]
 
     df_train = df_train.drop(columns=[c for c in drop_cols if c in df_train.columns], errors='ignore')
     df_val = df_val.drop(columns=[c for c in drop_cols if c in df_val.columns], errors='ignore')
 
     common_features = df_train.columns.intersection(df_val.columns).tolist()
-    common_features.remove(target_col)
 
-    X_train, y_train = df_train[common_features], df_train[[target_col]]
-    X_val, y_val = df_val[common_features], df_val[[target_col]]
+    X_train, y_train = df_train[common_features], y_train_df
+    X_val, y_val = df_val[common_features], y_val_df
 
     label_encoder = LabelEncoder()
     y_train = label_encoder.fit_transform(y_train.values.ravel())

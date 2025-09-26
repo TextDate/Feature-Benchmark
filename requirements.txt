@@ -1,11 +1,11 @@
 catboost==1.2.7
-imbalanced_learn==0.13.0
+imbalanced_learn==0.14.0
 imblearn==0.0
 joblib==1.4.2
 lightgbm==4.6.0
 matplotlib==3.10.3
 nltk==3.9.1
-numpy==2.3.1
+numpy==1.26.4
 pandas==2.3.1
 Pillow==11.3.0
 psutil==7.0.0
@@ -18,3 +18,4 @@ tqdm==4.67.1
 transformers==4.53.3
 vomm==0.1
 xgboost==3.0.2
+dask-expr==1.1.15
