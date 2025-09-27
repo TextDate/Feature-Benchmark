@@ -14,7 +14,7 @@ import numpy as np
 
 
 class BinaryModelTester:
-    def __init__(self, models, target, drop_cols, output_dir, output_file, label_encoder, feature_names):
+    def __init__(self, models, target, drop_cols, output_dir, output_file, label_encoder, feature_names, top_k=1):
         self.models = models
         self.target = target
         self.drop_cols = drop_cols
@@ -22,6 +22,7 @@ class BinaryModelTester:
         self.output_file = output_file
         self.label_encoder = label_encoder
         self.feature_names = feature_names
+        self.top_k = top_k
     
     def plot_confusion_matrix_for_threshold(self, model_name, threshold):
         """
@@ -62,7 +63,6 @@ class BinaryModelTester:
     
     def load_data(self, file_path, drop_cols, target, use_centuries=False, exclude_centuries=None):
         df = pd.read_csv(file_path)
-        df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors='ignore')
 
         if target not in df.columns:
             raise ValueError(f"Target column '{target}' not found in test file.")
@@ -77,9 +77,11 @@ class BinaryModelTester:
             removed = original_len - len(df)
             print(f"Excluded centuries: {exclude_centuries} ({removed} samples removed)", flush=True)
 
-        X = df.drop(columns=[target])
+        # Extract target column before dropping it
         y = df[target]
+        df = df.drop(columns=[col for col in drop_cols if col in df.columns], errors='ignore')
 
+        X = df.drop(columns=[target], errors='ignore')
         X = X[self.feature_names]
         y_encoded = self.label_encoder.transform(y)
 
@@ -92,6 +94,11 @@ class BinaryModelTester:
     def run(self):
         results = []
         thresholds = sorted(np.unique(self.y_test))
+
+        if self.top_k == 1:
+            print(f"Using original approach: single best prediction", flush=True)
+        else:
+            print(f"Using top-{self.top_k} probability summing approach", flush=True)
 
         for threshold in thresholds[1:-1]:  # Skip the first and last thresholds to avoid trivial cases
             decoded_threshold = self.label_encoder.inverse_transform([threshold])[0]
@@ -114,8 +121,34 @@ class BinaryModelTester:
                         print(f"Failed to load model from {model_path}: {e}", flush=True)
                         continue
 
-                    y_pred = model.predict(self.X_test)
-                    y_pred_bin = (y_pred >= threshold).astype(int)
+                    if self.top_k == 1:
+                        # Original approach: use single best prediction
+                        y_pred = model.predict(self.X_test)
+                        y_pred_bin = (y_pred >= threshold).astype(int)
+                    else:
+                        # Top-K approach: use probability sum for binary decision
+                        if hasattr(model, "predict_proba"):
+                            proba = model.predict_proba(self.X_test)
+                            classes = model.classes_
+                            k = min(self.top_k, len(classes))
+
+                            # Get top-K predictions for each sample
+                            top_k_indices = np.argsort(proba, axis=1)[:, -k:]
+                            y_pred_bin = np.zeros(len(self.X_test))
+
+                            for i in range(len(self.X_test)):
+                                # Sum probabilities of top-K classes >= threshold
+                                top_classes = classes[top_k_indices[i]]
+                                top_probs = proba[i, top_k_indices[i]]
+
+                                prob_newer = top_probs[top_classes >= threshold].sum()
+                                prob_older = top_probs[top_classes < threshold].sum()
+
+                                y_pred_bin[i] = 1 if prob_newer > prob_older else 0
+                        else:
+                            # Fallback to single prediction if no predict_proba
+                            y_pred = model.predict(self.X_test)
+                            y_pred_bin = (y_pred >= threshold).astype(int)
 
                     if hasattr(model, "predict_proba"):
                         proba = model.predict_proba(self.X_test)
@@ -166,6 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--drop_cols", nargs="+", required=True, help="Columns to drop from input features")
     parser.add_argument("--output_dir", type=str, default=".", help="Directory to save the results CSV files")
     parser.add_argument("--output_file", type=str, nargs="?", default="binary_results.csv", help="Output file name for results")
+    parser.add_argument("--top_k", type=int, default=1, help="Number of top predictions to consider for binary classification (default: 1)")
 
     args = parser.parse_args()
 
@@ -185,7 +219,8 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         output_file=args.output_file,
         label_encoder=label_encoder,
-        feature_names=feature_names
+        feature_names=feature_names,
+        top_k=args.top_k
     )
 
     X_test, y_test = tester.load_data(args.test_file, drop_cols, args.target)
