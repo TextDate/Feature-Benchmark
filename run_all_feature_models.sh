@@ -578,7 +578,6 @@ main() {
     fi
 
     # Update total phases based on selected workflows
-    TOTAL_PHASES=${#workflows[@]}
     CURRENT_PHASE=0
 
     # Validate that we have workflows to run

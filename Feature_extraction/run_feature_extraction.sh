@@ -4,7 +4,7 @@
 #SBATCH --error=logs/feature_extraction_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=30
 #SBATCH --mem=230GB
 #SBATCH --partition=cpu
 
@@ -45,7 +45,7 @@ GUTENBERG_DIR="../Dataset/Sorted_texts_trimmed_gutenberg/"
 OUTPUT_DIR="Extracted_features"
 
 # Processing parameters optimized for HPC
-ORDER=""  # Set to empty string "" for order 1 only, or specify order (e.g., 2)
+ORDER=2  # Set to empty string "" for order 1 only, or specify order (e.g., 2)
 CHUNK_SIZE=1000  # Smaller chunks for memory efficiency
 THREADS=$SLURM_CPUS_PER_TASK  # Threads for training/validation phases (heavy computation)
 INFERENCE_THREADS=4  # Threads for test/gutenberg phases (inference/testing) - set to different value if desired
