@@ -258,6 +258,7 @@ run_base_testing() {
     local target="$3"      # decade or century
     local test_file_pattern="$4"
     local test_description="$5"
+    local dataset_suffix="$6"  # dataset identifier (test, gutenberg, etc.)
 
     local model_dir="Saved_models/$feature_type/$time_scale"
     local result_dir="Saved_models_results/$feature_type/$time_scale"
@@ -300,6 +301,11 @@ run_base_testing() {
         "--drop_cols" "$drop_cols"
         "--output_dir" "$result_dir"
     )
+
+    # Add dataset suffix if provided
+    if [[ -n "$dataset_suffix" ]]; then
+        cmd_args+=("--dataset_suffix" "$dataset_suffix")
+    fi
 
     # Add --use_centuries flag for century targets
     if [[ "$target" == "century" ]]; then
@@ -424,13 +430,13 @@ run_feature_workflow() {
     fi
 
     # Phase 2: Base Model Testing (Test Dataset)
-    if ! run_base_testing "$feature_type" "$time_scale" "$target" "test_features_cleaned_*.csv" "Test Dataset Evaluation"; then
+    if ! run_base_testing "$feature_type" "$time_scale" "$target" "test_features_cleaned_*.csv" "Test Dataset Evaluation" "test"; then
         log "ERROR: Base model test evaluation failed for $feature_type - $time_scale, aborting workflow"
         return 1
     fi
 
     # Phase 3: Base Model Testing (Gutenberg Dataset)
-    if ! run_base_testing "$feature_type" "$time_scale" "$target" "gutenberg_features_cleaned_*.csv" "Gutenberg Dataset Evaluation"; then
+    if ! run_base_testing "$feature_type" "$time_scale" "$target" "gutenberg_features_cleaned_*.csv" "Gutenberg Dataset Evaluation" "gutenberg"; then
         log "ERROR: Base model Gutenberg evaluation failed for $feature_type - $time_scale, aborting workflow"
         return 1
     fi

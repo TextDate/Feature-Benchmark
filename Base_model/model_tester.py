@@ -141,7 +141,8 @@ def main(args):
 
         df_result = pd.DataFrame([result])
         os.makedirs(args.output_dir, exist_ok=True)
-        output_csv = os.path.join(args.output_dir, f"{model_name}_results.csv")
+        suffix = f"_{args.dataset_suffix}" if args.dataset_suffix else ""
+        output_csv = os.path.join(args.output_dir, f"{model_name}_results{suffix}.csv")
         df_result.to_csv(output_csv, index=False)
         print(f"[INFO] Results saved to {output_csv}\n")
         
@@ -163,6 +164,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_centuries", action="store_true", help="Convert decades to centuries for evaluation")
     parser.add_argument("--exclude_centuries", type=int, nargs='*', help="Centuries to exclude (e.g. 17 18)")
     parser.add_argument("--predict_distribution", action="store_true", help="Print prediction distribution for each class")
+    parser.add_argument("--dataset_suffix", default="", help="Suffix to identify dataset type (e.g., 'test', 'gutenberg')")
     args = parser.parse_args()
     main(args)
     
