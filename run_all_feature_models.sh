@@ -4,16 +4,22 @@
 #SBATCH --error=logs/all_feature_models_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=48
 #SBATCH --gres=gpu:0
 #SBATCH --mem=200GB
 #SBATCH --partition=cpu
 #SBATCH --time=48:00:00
 
-# Master SLURM Script for All Feature-Specific Base and Binary Models
-# Runs all 4 feature types (Compression, Lexical-Structure, Readability, Distance)
+# Master SLURM Script for Feature-Specific Base and Binary Models
+# Supports selective execution of feature types: compression, lexical_structure, readability, distance, final_model
 # For both decades and centuries classification with base and binary models
 # Optimized for SLURM HPC environments with comprehensive error handling
+#
+# Usage: sbatch [SLURM_OPTIONS] run_all_feature_models.sh [SCRIPT_OPTIONS]
+# Examples:
+#   sbatch run_all_feature_models.sh                    # Run all features
+#   sbatch run_all_feature_models.sh -f compression     # Run only compression
+#   sbatch run_all_feature_models.sh -f final_model     # Run only final model
 
 set -e  # Exit on any error
 
@@ -31,6 +37,9 @@ echo "Node: $SLURM_NODELIST"
 echo "CPUs: $SLURM_CPUS_PER_TASK"
 echo "Memory: ${SLURM_MEM_PER_NODE}MB"
 echo "Start time: $(date)"
+echo "Binary Model Configuration:"
+echo "  - Decades: Top-$TOP_K_DECADES probability summing"
+echo "  - Centuries: Top-$TOP_K_CENTURIES probability summing"
 echo "======================================================================="
 
 # ==================== GLOBAL CONFIGURATION ====================
@@ -38,6 +47,10 @@ echo "======================================================================="
 # Model configuration
 MODELS=("random_forest" "xgboost" "catboost" "svm" "gnb" "knn")
 N_ESTIMATORS=1000
+
+# Binary model configuration
+TOP_K_DECADES=10    # Top-K for decade classification (43 classes)
+TOP_K_CENTURIES=1   # Top-K for century classification (5 classes)
 
 # Feature directories
 FEATURE_DIR="Extracted_features"
@@ -49,9 +62,10 @@ FEATURE_CONFIGS[compression]="file_name,year,decade,century,special_character_ra
 FEATURE_CONFIGS[lexical_structure]="file_name,year,decade,century,special_character_ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Flesch_Readability"
 FEATURE_CONFIGS[readability]="file_name,year,decade,century,special_character_ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Stopword_Ratio,by,and,the,at,in,with,a,is,to,of,as,on,an,that,for,it,was"
 FEATURE_CONFIGS[distance]="file_name,year,decade,century,special_character_ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio"
+FEATURE_CONFIGS[final_model]="file_name,year,decade,century,special_character_ratio"
 
 # Execution order and progress tracking
-TOTAL_PHASES=32  # 4 features × 2 time_scales × 2 model_types × 2 workflows (training+testing vs testing only)
+TOTAL_PHASES=20  # 5 feature types × 4 workflows (decades/centuries × base/binary)
 CURRENT_PHASE=0
 OVERALL_START_TIME=$(date +%s)
 
@@ -360,13 +374,24 @@ run_binary_testing() {
         log "Feature Type: $feature_type - $time_scale"
         log "--------------------------------------------"
 
+        # Set top_k based on target type
+        local top_k
+        if [[ "$target" == "century" ]]; then
+            top_k="$TOP_K_CENTURIES"
+            log "Using top-$top_k approach for century classification"
+        else
+            top_k="$TOP_K_DECADES"
+            log "Using top-$top_k approach for decade classification"
+        fi
+
         python Binary_model/binary_model_tester.py \
             --test_file "$dataset_file" \
             --target "$target" \
             --models "${model_source_dir}/random_forest_model.pkl" "${model_source_dir}/xgboost_model.pkl" "${model_source_dir}/catboost_model.pkl" "random" \
             --drop_cols $drop_cols \
             --output_file "binary_results_${output_suffix}.csv" \
-            --output_dir "$output_dir"
+            --output_dir "$output_dir" \
+            --top_k "$top_k"
 
         local exit_code=$?
         if [[ $exit_code -ne 0 ]]; then
@@ -441,13 +466,61 @@ cleanup() {
     log "======================================================================="
 }
 
+# ==================== ARGUMENT PARSING ====================
+
+usage() {
+    echo "Usage: sbatch [SLURM_OPTIONS] $0 [SCRIPT_OPTIONS]"
+    echo "Script Options:"
+    echo "  -f, --features FEATURES    Comma-separated list of feature types to run"
+    echo "                            Available: compression,lexical_structure,readability,distance,final_model"
+    echo "                            Default: all"
+    echo "  -h, --help                Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  sbatch $0                                        # Run all feature types"
+    echo "  sbatch $0 -f compression                         # Run only compression features"
+    echo "  sbatch $0 -f compression,readability             # Run compression and readability"
+    echo "  sbatch $0 -f final_model                         # Run only the final combined model"
+    echo ""
+    echo "SLURM Examples:"
+    echo "  sbatch --job-name=compression $0 -f compression  # Custom job name"
+    echo "  sbatch --mem=100GB $0 -f final_model             # Custom memory allocation"
+}
+
+parse_arguments() {
+    SELECTED_FEATURES="all"
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -f|--features)
+                SELECTED_FEATURES="$2"
+                shift 2
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                echo "Unknown option: $1"
+                usage
+                exit 1
+                ;;
+        esac
+    done
+}
+
 # ==================== MAIN EXECUTION ====================
 
 main() {
     # Set up cleanup trap
     trap cleanup EXIT
 
-    log "Starting Master Feature Model Pipeline - ALL FEATURE TYPES"
+    # Parse command line arguments
+    parse_arguments "$@"
+
+    log "Starting Feature Model Pipeline"
+    log "Selected features: $SELECTED_FEATURES"
+    log "SLURM Job ID: ${SLURM_JOB_ID:-N/A}"
     log "======================================================================="
 
     # Create necessary directories
@@ -466,10 +539,8 @@ main() {
 
     log "Validated feature extraction directory: $FEATURE_DIR"
 
-    # Define execution order: Feature Type -> Time Scale -> Target
-    # Order: Compression, Lexical-Structure, Readability, Distance
-    # Each with decades then centuries
-    local workflows=(
+    # Define all possible workflows
+    local all_workflows=(
         "compression:decades:decade"
         "compression:centuries:century"
         "lexical_structure:decades:decade"
@@ -478,9 +549,40 @@ main() {
         "readability:centuries:century"
         "distance:decades:decade"
         "distance:centuries:century"
+        "final_model:decades:decade"
+        "final_model:centuries:century"
     )
 
-    log "Execution order planned:"
+    # Filter workflows based on selected features
+    local workflows=()
+    if [[ "$SELECTED_FEATURES" == "all" ]]; then
+        workflows=("${all_workflows[@]}")
+    else
+        IFS=',' read -ra SELECTED_ARRAY <<< "$SELECTED_FEATURES"
+        for workflow in "${all_workflows[@]}"; do
+            IFS=':' read -r feature_type time_scale target <<< "$workflow"
+            for selected in "${SELECTED_ARRAY[@]}"; do
+                selected=$(echo "$selected" | xargs)  # Trim whitespace
+                if [[ "$feature_type" == "$selected" ]]; then
+                    workflows+=("$workflow")
+                    break
+                fi
+            done
+        done
+    fi
+
+    # Update total phases based on selected workflows
+    TOTAL_PHASES=${#workflows[@]}
+    CURRENT_PHASE=0
+
+    # Validate that we have workflows to run
+    if [[ ${#workflows[@]} -eq 0 ]]; then
+        log "ERROR: No valid feature types selected or found"
+        log "Available feature types: compression, lexical_structure, readability, distance, final_model"
+        exit 1
+    fi
+
+    log "Execution order planned (${#workflows[@]} workflows):"
     for i in "${!workflows[@]}"; do
         IFS=':' read -r feature_type time_scale target <<< "${workflows[$i]}"
         log "  $((i+1)). $feature_type - $time_scale ($target)"
@@ -497,7 +599,7 @@ main() {
     done
 
     log "======================================================================="
-    log "ALL FEATURE MODEL PIPELINES COMPLETED SUCCESSFULLY"
+    log "SELECTED FEATURE PIPELINES COMPLETED SUCCESSFULLY"
     log "======================================================================="
     log ""
     log "Summary of completed workflows:"
