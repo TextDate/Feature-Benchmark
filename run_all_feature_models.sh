@@ -11,7 +11,7 @@
 #SBATCH --time=48:00:00
 
 # Master SLURM Script for Feature-Specific Base and Binary Models
-# Supports selective execution of feature types: compression, lexical_structure, readability, distance, final_model
+# Supports selective execution of feature types: compression, lexical_structure, readability, distance, neologism, final_model
 # For both decades and centuries classification with base and binary models
 # Optimized for SLURM HPC environments with comprehensive error handling
 #
@@ -24,6 +24,7 @@
 set -e  # Exit on any error
 
 # Set up environment
+source ../../virtual-venv/bin/activate
 export PYTHONPATH=$(pwd)
 export OPENBLAS_NUM_THREADS=2
 
@@ -57,15 +58,41 @@ FEATURE_DIR="Extracted_features"
 LOG_DIR="logs"
 
 # Feature type configurations (DROP_COLS for each feature type)
+# Features used for training = All dataset features MINUS the drop_cols listed below
 declare -A FEATURE_CONFIGS
-FEATURE_CONFIGS[compression]="file_name,year,decade,century,special_character_ratio,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,by,and,the,at,in,with,a,is,to,of,as,on,an,that,for,it,was"
-FEATURE_CONFIGS[lexical_structure]="file_name,year,decade,century,special_character_ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Flesch_Readability"
-FEATURE_CONFIGS[readability]="file_name,year,decade,century,special_character_ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Stopword_Ratio,by,and,the,at,in,with,a,is,to,of,as,on,an,that,for,it,was"
-FEATURE_CONFIGS[distance]="file_name,year,decade,century,special_character_ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio"
-FEATURE_CONFIGS[final_model]="file_name,year,decade,century,special_character_ratio"
+
+# COMPRESSION MODEL FEATURES (7 features used):
+# Used: Compression_Ratio_Order_1, NRC_Order_1, Entropy_Ratio_Order_1, Shannon_Entropy,
+#       Compression_Ratio_Order_2, NRC_Order_2, Entropy_Ratio_Order_2
+FEATURE_CONFIGS[compression]="file_name,year,decade,century,Special_Character_Ratio,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
+
+# LEXICAL STRUCTURE MODEL FEATURES (6 features used):
+# Used: Avg_Word_Length, Lexical_Richness, Avg_Sentence_Length, Punctuation_Density,
+#       Syllable_Per_Word, Digit_Ratio
+FEATURE_CONFIGS[lexical_structure]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
+
+# READABILITY MODEL FEATURES (2 features used):
+# Used: Flesch_Readability, Stopword_Ratio
+FEATURE_CONFIGS[readability]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
+
+# DISTANCE MODEL FEATURES (17 features used):
+# Used: at, and, by, the, for, a, of, with, to, as, on, in, an, that, it, is, was
+FEATURE_CONFIGS[distance]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
+
+# NEOLOGISM MODEL FEATURES (11 features used):
+# Used: contains_early_modern_words, contains_industrial_words, contains_late_industrial_words,
+#       contains_early_20th_words, contains_post_war_words, contains_late_modern_words,
+#       contains_digital_dawn_words, contains_digital_native_words, contains_modern_vocabulary,
+#       contains_historical_vocabulary, vocabulary_modernity_score
+FEATURE_CONFIGS[neologism]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was"
+
+# FINAL MODEL FEATURES (36 features used):
+# Used: All features except file_name, year, decade, century, Special_Character_Ratio
+# Combines: 7 compression + 6 lexical structure + 2 readability + 17 distance + 11 neologism (fixed) = 43 total
+FEATURE_CONFIGS[final_model]="file_name,year,decade,century,Special_Character_Ratio"
 
 # Execution order and progress tracking
-TOTAL_PHASES=20  # 5 feature types × 4 workflows (decades/centuries × base/binary)
+TOTAL_PHASES=24  # 6 feature types × 4 workflows (decades/centuries × base/binary)
 CURRENT_PHASE=0
 OVERALL_START_TIME=$(date +%s)
 
@@ -478,7 +505,7 @@ usage() {
     echo "Usage: sbatch [SLURM_OPTIONS] $0 [SCRIPT_OPTIONS]"
     echo "Script Options:"
     echo "  -f, --features FEATURES    Comma-separated list of feature types to run"
-    echo "                            Available: compression,lexical_structure,readability,distance,final_model"
+    echo "                            Available: compression,lexical_structure,readability,distance,neologism,final_model"
     echo "                            Default: all"
     echo "  -h, --help                Show this help message"
     echo ""
@@ -555,6 +582,8 @@ main() {
         "readability:centuries:century"
         "distance:decades:decade"
         "distance:centuries:century"
+        "neologism:decades:decade"
+        "neologism:centuries:century"
         "final_model:decades:decade"
         "final_model:centuries:century"
     )
@@ -583,7 +612,7 @@ main() {
     # Validate that we have workflows to run
     if [[ ${#workflows[@]} -eq 0 ]]; then
         log "ERROR: No valid feature types selected or found"
-        log "Available feature types: compression, lexical_structure, readability, distance, final_model"
+        log "Available feature types: compression, lexical_structure, readability, distance, neologism, final_model"
         exit 1
     fi
 

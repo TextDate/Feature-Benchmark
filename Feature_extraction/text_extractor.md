@@ -40,7 +40,7 @@ These features describe **the structure and complexity of the text**.
 | `stopword_ratio`          | % of**common stopwords** (e.g., "the", "and", "is").                                      |
 | `uppercase_ratio`         | % of uppercase letters in the text.                                                       |
 | `digit_ratio`             | % of digits in the text.                                                                  |
-| `special_character_ratio` | % of**non-alphanumeric** special characters.                                              |
+| ~~`special_character_ratio`~~ | **[DEPRECATED - REMOVED]** % of non-alphanumeric special characters.                   |
 
 ## **3️⃣ Readability & Complexity Features**
 

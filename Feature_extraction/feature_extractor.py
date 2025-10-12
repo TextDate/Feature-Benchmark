@@ -24,6 +24,7 @@ import resource
 import sys
 import warnings
 import logging
+# Neologism detection integrated directly in TextFeatureExtractor
 
 # Global variables for worker initialization
 _global_extractor = None
@@ -46,6 +47,11 @@ class TextFeatureExtractor:
         self.reference_text = reference_text
         self.reference_models = prebuilt_models if prebuilt_models is not None else {}
         self.use_ncd = use_ncd
+
+        # Initialize neologism detection data
+        self.neologism_words = {}
+        self.neologism_periods = {}
+        self._load_neologism_data()
 
         # Use pre-computed reference data if provided, otherwise compute it
         if prebuilt_reference_data is not None:
@@ -356,12 +362,13 @@ class TextFeatureExtractor:
             with open(text_path, 'r', encoding='utf-8', errors='ignore') as file:
                 text = file.read()
 
+            filename = os.path.basename(text_path)
             features = self.extract(text, target_words,
                                     order=order,
                                     alphabet_size=alphabet_size,
                                     word_distance_type=word_distance_type,
                                     use_ncd=self.use_ncd)
-            features["file_name"] = os.path.basename(text_path)
+            features["file_name"] = filename
             return features
         except Exception as e:
             print(f"Error processing {text_path}: {e}", flush=True)
@@ -391,8 +398,7 @@ class TextFeatureExtractor:
             "Avg_Sentence_Length": self.average_sentence_length(text),
             "Punctuation_Density": self.punctuation_density(text, text_length),
             "Syllable_Per_Word": self.syllable_per_word(words, word_count),
-            "Digit_Ratio": self.digit_ratio(text, text_length),
-            "Special_Character_Ratio": self.special_character_ratio(text, text_length)
+            "Digit_Ratio": self.digit_ratio(text, text_length)
         }
 
         # Add NCD if enabled
@@ -402,7 +408,7 @@ class TextFeatureExtractor:
         # Add higher order features if order is specified and not 1
         if order is not None and order != 1:
             higher_order_features = {
-                f"Compression_Ratio_Markov_Order_{order}": self.compression_ratio(text, order=order),
+                f"Compression_Ratio_Order_{order}": self.compression_ratio(text, order=order),
                 f"NRC_Order_{order}": self.nrc(text, order=order, alphabet_size=alphabet_size),
                 f"Entropy_Ratio_Order_{order}": self.entropy_ratio(text, order=order),
             }
@@ -427,6 +433,10 @@ class TextFeatureExtractor:
 
             for feature_name, value in word_distances.items():
                 features[feature_name] = value
+
+        # Add neologism features (no data leakage - no ground truth year used)
+        neologism_features = self._detect_neologisms(text)
+        features.update(neologism_features)
 
         return features
 
@@ -563,12 +573,12 @@ class TextFeatureExtractor:
         text_length = text_length if text_length is not None else len(text)
         return sum(1 for char in text if char.isdigit()) / text_length
 
-    def special_character_ratio(self, text:str, text_length=None):
-        """Calculates the ratio of special characters using cached length."""
-        if not text:
-            return 0
-        text_length = text_length if text_length is not None else len(text)
-        return sum(1 for char in text if not char.isalnum() and char not in string.punctuation and not char.isspace()) / text_length
+    # def special_character_ratio(self, text:str, text_length=None):
+    #     """[DEPRECATED] Calculates the ratio of special characters using cached length."""
+    #     if not text:
+    #         return 0
+    #     text_length = text_length if text_length is not None else len(text)
+    #     return sum(1 for char in text if not char.isalnum() and char not in string.punctuation and not char.isspace()) / text_length
 
     def flesch_readability(self, text:str):
         """Calculates Flesch reading ease score (English only)."""
@@ -825,7 +835,89 @@ class TextFeatureExtractor:
         print(f"Reference text length: {len(reference_text):,} characters", flush=True)
 
         return reference_text
-    
+
+    def _load_neologism_data(self):
+        """Load neologism words and periods from target_words.json."""
+        try:
+            # Try to load from the same directory as target_words.json
+            target_words_path = os.path.join(os.path.dirname(__file__), "target_words.json")
+            if not os.path.exists(target_words_path):
+                # Fallback: look in current directory
+                target_words_path = "target_words.json"
+
+            with open(target_words_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            if "neologisms" in data:
+                self.neologism_words = data["neologisms"]
+                # Convert to sets for faster lookup
+                for period in self.neologism_words:
+                    words = self.neologism_words[period]
+                    if self.lowercase:
+                        words = [w.lower() for w in words]
+                    self.neologism_words[period] = set(words)
+
+            if "neologism_periods" in data:
+                self.neologism_periods = data["neologism_periods"]
+
+        except Exception as e:
+            print(f"[WARNING] Could not load neologism data: {e}", flush=True)
+            self.neologism_words = {}
+            self.neologism_periods = {}
+
+    def _detect_neologisms(self, text):
+        """
+        Detect neologism presence in text without using ground truth year (no data leakage).
+
+        Args:
+            text: Text to analyze
+
+        Returns:
+            Dictionary of neologism features
+        """
+        if not self.neologism_words or not self.neologism_periods:
+            # Return empty features if no neologism data loaded
+            return {f"contains_{period}_words": False for period in self.neologism_periods.keys()}
+
+        # Preprocess text for word matching
+        if self.lowercase:
+            text = text.lower()
+
+        # Extract words, handling hyphenated compounds and contractions
+        import re
+        words = re.findall(r"\b[a-zA-Z]+(?:[-'][a-zA-Z]+)*\b", text)
+        word_set = set(words)
+
+        features = {}
+
+        # Check each period for word presence (no anachronism calculation)
+        for period_name in self.neologism_periods.keys():
+            period_words = self.neologism_words.get(period_name, set())
+            found_words = []
+
+            for neologism in period_words:
+                # Handle multi-word phrases
+                if ' ' in neologism:
+                    phrase_pattern = neologism.replace(' ', r'\s+')
+                    if re.search(r'\b' + phrase_pattern + r'\b', text, re.IGNORECASE):
+                        found_words.append(neologism)
+                elif neologism in word_set:
+                    found_words.append(neologism)
+
+            # Create boolean presence feature for this period
+            features[f"contains_{period_name}_words"] = len(found_words) > 0
+
+        # Add valid aggregate features (no ground truth dependency)
+        # These represent vocabulary modernity without using claimed year
+        modern_periods = ["late_modern", "digital_dawn", "digital_native"]
+        historical_periods = ["early_modern", "industrial", "late_industrial"]
+
+        features["contains_modern_vocabulary"] = any(features[f"contains_{period}_words"] for period in modern_periods)
+        features["contains_historical_vocabulary"] = any(features[f"contains_{period}_words"] for period in historical_periods)
+        features["vocabulary_modernity_score"] = sum(features[f"contains_{period}_words"] for period in modern_periods) / max(1, len(modern_periods))
+
+        return features
+
     def load_target_words(self, path=None):
         if not path:
             return set()
@@ -1158,6 +1250,7 @@ def file_processor(args):
 
         # Extract features with timeout and error handling
         try:
+            filename = os.path.basename(file_path)
             features = _global_extractor.extract(
                 text,
                 target_words=_global_target_words,
@@ -1171,7 +1264,7 @@ def file_processor(args):
                 print(f"[WORKER-WARNING] No features extracted from {file_path}", flush=True)
                 return None
 
-            features["file_name"] = os.path.basename(file_path)
+            features["file_name"] = filename
 
         except Exception as extract_e:
             print(f"[WORKER-ERROR] Feature extraction failed for {file_path}: {extract_e}", flush=True)
@@ -1421,9 +1514,28 @@ if __name__ == "__main__":
     # Define validation reference path for checking existence
     validation_reference_path = f"{args.valid}_reference_{args.validation_reference_percentage*100:.1f}pct.txt" if args.valid else f"../Dataset/Sorted_texts_trimmed/validation_reference_{args.validation_reference_percentage*100:.1f}pct.txt"
 
-    # Use hardcoded alphabet size of 69 for speed (as requested)
-    global_alphabet_size = 69
-    print(f"Using hardcoded alphabet size: {global_alphabet_size}")
+    # Compute actual alphabet size based on dataset and lowercase mode
+    print("[INFO] Computing global alphabet size from datasets...", flush=True)
+    temp_extractor = TextFeatureExtractor(args.file_info, args.lang, 1, args.lowercase)
+
+    # Collect all available directories for alphabet size computation
+    directories_to_scan = []
+    if args.train:
+        directories_to_scan.append(args.train)
+    if args.valid:
+        directories_to_scan.append(args.valid)
+    if args.test:
+        directories_to_scan.append(args.test)
+
+    if directories_to_scan:
+        global_alphabet_size = temp_extractor.compute_global_alphabet_size(directories_to_scan)
+    else:
+        # Fallback to hardcoded value if no directories available
+        global_alphabet_size = 43 if args.lowercase else 69
+        print(f"[WARNING] No directories available for scanning, using fallback alphabet size: {global_alphabet_size}", flush=True)
+
+    print(f"Using computed alphabet size: {global_alphabet_size} (lowercase mode: {args.lowercase})", flush=True)
+    del temp_extractor
 
     if args.train:
         print(f"[TRAIN] Creating training extractor with {args.threads} threads", flush=True)

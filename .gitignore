@@ -228,3 +228,11 @@ bert*
 NN*
 .claude
 Extracted_features/
+feature_analysis_results/
+feature_importance_results/
+
+# Thesis git repository (nested repo)
+Thesis/
+
+CLAUDE.md
+old_results/

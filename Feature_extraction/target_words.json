@@ -4,6 +4,26 @@
     "german": ["der", "die", "das", "ein", "eine", "und", "in", "dass", "es", "war", "ist", "für", "auf", "mit", "als", "von", "bei"],
     "spanish": ["el", "la", "los", "un", "una", "y", "en", "que", "es", "fue", "para", "sobre", "con", "como", "por", "a"],
     "italian": ["il", "la", "i", "un", "una", "e", "in", "che", "è", "era", "per", "su", "con", "come", "da", "a"],
-    "portuguese": ["o", "a", "os", "um", "uma", "e", "em", "que", "é", "foi", "para", "sobre", "com", "como", "por", "a"]
+    "portuguese": ["o", "a", "os", "um", "uma", "e", "em", "que", "é", "foi", "para", "sobre", "com", "como", "por", "a"],
+    "neologisms": {
+        "early_modern": ["telescope", "microscope", "thermometer", "electricity", "gravity", "atmosphere", "barometer", "pendulum", "optics", "newspaper", "insurance", "dividend", "mortgage", "coffee house", "bank account"],
+        "industrial": ["steam engine", "factory", "railway", "steamboat", "locomotive", "omnibus", "spinning jenny", "cotton gin", "manufacturing", "industrial", "machinery", "working class", "middle class", "capitalism", "socialism"],
+        "late_industrial": ["telephone", "electric light", "photograph", "telegraph", "typewriter", "phonograph", "incandescent", "generator", "bicycle", "automobile", "bacteria", "vaccine", "antiseptic", "kindergarten", "department store"],
+        "early_20th": ["radio", "television", "computer", "airplane", "aviation", "airport", "broadcasting", "movie", "cinema", "jazz", "teenager", "lifestyle", "celebrity", "vitamin", "hormone"],
+        "post_war": ["transistor", "satellite", "laser", "television series", "supermarket", "fast food", "highway", "antibiotic", "rock and roll", "civil rights", "feminism", "ecology", "space program", "nuclear power", "computer programming"],
+        "late_modern": ["personal computer", "software", "microwave", "video cassette", "compact disc", "cable television", "atm", "fax machine", "yuppie", "aerobics", "environmentalism", "franchise", "multinational corporation", "brand loyalty", "walkman"],
+        "digital_dawn": ["internet", "website", "email", "world wide web", "online", "download", "virtual reality", "gps", "cell phone", "laptop", "cd-rom", "dot-com", "millennium bug", "search engine", "browser"],
+        "digital_native": ["blog", "podcast", "tweet", "smartphone", "app", "tablet", "social media", "streaming", "viral", "cloud computing", "artificial intelligence", "cryptocurrency", "bitcoin", "facebook", "youtube"]
+    },
+    "neologism_periods": {
+        "early_modern": [1600, 1749],
+        "industrial": [1750, 1849],
+        "late_industrial": [1850, 1899],
+        "early_20th": [1900, 1949],
+        "post_war": [1950, 1974],
+        "late_modern": [1975, 1989],
+        "digital_dawn": [1990, 2004],
+        "digital_native": [2005, 2024]
+    }
   }
   

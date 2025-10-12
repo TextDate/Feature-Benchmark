@@ -2,6 +2,36 @@
 
 This README provides detailed explanations for each feature extracted by the `TextFeatureExtractor` module. These features aim to capture various linguistic, statistical, and structural properties of a text file, which can be used for analysis, classification, or machine learning tasks.
 
+## 🕰️ **Neologism Detection Features (Fixed - No Data Leakage)**
+
+### Temporal Vocabulary Detection
+- **Description**: Detects period-specific vocabulary without using ground truth dates
+- **Features Added**: 11 new features for temporal classification
+- **Word List**: 120 curated words (15 per time period) with 95%+ etymological confidence
+- **Time Periods**: 8 periods from 1600-2024 aligned with decade/century classification
+
+### Boolean Presence Features (8 features)
+- `contains_early_modern_words`: Words from 1600-1749 (telescope, microscope, electricity, etc.)
+- `contains_industrial_words`: Words from 1750-1849 (steam engine, factory, railway, etc.)
+- `contains_late_industrial_words`: Words from 1850-1899 (telephone, photograph, automobile, etc.)
+- `contains_early_20th_words`: Words from 1900-1949 (radio, television, airplane, etc.)
+- `contains_post_war_words`: Words from 1950-1974 (transistor, satellite, rock and roll, etc.)
+- `contains_late_modern_words`: Words from 1975-1989 (personal computer, software, etc.)
+- `contains_digital_dawn_words`: Words from 1990-2004 (internet, website, email, etc.)
+- `contains_digital_native_words`: Words from 2005-2024 (smartphone, social media, etc.)
+
+### Aggregate Vocabulary Features (3 features)
+- `contains_modern_vocabulary`: Presence of late modern/digital era words (1975+)
+- `contains_historical_vocabulary`: Presence of early historical words (pre-1900)
+- `vocabulary_modernity_score`: Ratio of modern period words detected (0.0-1.0)
+
+**⚠️ Data Leakage Fix**: Removed features that used claimed year:
+- ~~`max_anachronism_gap_years`~~ (used ground truth year - DATA LEAKAGE)
+- ~~`anachronism_word_count`~~ (counted violations vs ground truth - DATA LEAKAGE)
+- ~~`anachronism_density`~~ (based on ground truth violations - DATA LEAKAGE)
+
+**Configuration**: Words are stored in `target_words.json` under the "neologisms" section.
+
 ---
 
 ## Compression and Entropy Features
@@ -59,9 +89,9 @@ This README provides detailed explanations for each feature extracted by the `Te
 - **How it's computed**: Digits / total characters.
 - **Insight**: Useful in distinguishing numeric-heavy documents like reports or manuals.
 
-### `special_character_ratio`
-- **How it's computed**: Special non-alphanumeric, non-punctuation characters / total characters.
-- **Insight**: High values may indicate noise or encoding issues.
+### `special_character_ratio` **[DEPRECATED - REMOVED]**
+- **How it was computed**: Special non-alphanumeric, non-punctuation characters / total characters.
+- **Why removed**: This feature was deprecated and removed from the extraction pipeline as it was not providing meaningful discriminative value for temporal classification tasks.
 
 ---
 
