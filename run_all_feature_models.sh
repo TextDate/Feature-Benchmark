@@ -11,7 +11,7 @@
 #SBATCH --time=48:00:00
 
 # Master SLURM Script for Feature-Specific Base and Binary Models
-# Supports selective execution of feature types: compression, lexical_structure, readability, distance, neologism, final_model
+# Supports selective execution of feature types: compression, lexical_structure, readability, distance, neologism, final_model, optimal
 # For both decades and centuries classification with base and binary models
 # Optimized for SLURM HPC environments with comprehensive error handling
 #
@@ -91,8 +91,14 @@ FEATURE_CONFIGS[neologism]="file_name,year,decade,century,Special_Character_Rati
 # Combines: 7 compression + 6 lexical structure + 2 readability + 17 distance + 11 neologism (fixed) = 43 total
 FEATURE_CONFIGS[final_model]="file_name,year,decade,century,Special_Character_Ratio"
 
+# OPTIMAL MODEL FEATURES (16 features used):
+# Used: Lexical_Richness, Syllable_Per_Word, Punctuation_Density, contains_late_industrial_words, Digit_Ratio, on,
+#       Avg_Sentence_Length, Avg_Word_Length, to, by, NRC_Order_2, Entropy_Ratio_Order_1, contains_early_20th_words,
+#       contains_historical_vocabulary, was, Stopword_Ratio
+FEATURE_CONFIGS[optimal]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,Entropy_Ratio_Order_2,Flesch_Readability,at,and,for,the,of,in,with,as,a,is,it,that,an,contains_early_modern_words,contains_industrial_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,vocabulary_modernity_score"
+
 # Execution order and progress tracking
-TOTAL_PHASES=24  # 6 feature types × 4 workflows (decades/centuries × base/binary)
+TOTAL_PHASES=28  # 7 feature types × 4 workflows (decades/centuries × base/binary)
 CURRENT_PHASE=0
 OVERALL_START_TIME=$(date +%s)
 
@@ -505,7 +511,7 @@ usage() {
     echo "Usage: sbatch [SLURM_OPTIONS] $0 [SCRIPT_OPTIONS]"
     echo "Script Options:"
     echo "  -f, --features FEATURES    Comma-separated list of feature types to run"
-    echo "                            Available: compression,lexical_structure,readability,distance,neologism,final_model"
+    echo "                            Available: compression,lexical_structure,readability,distance,neologism,final_model,optimal"
     echo "                            Default: all"
     echo "  -h, --help                Show this help message"
     echo ""
@@ -514,6 +520,7 @@ usage() {
     echo "  sbatch $0 -f compression                         # Run only compression features"
     echo "  sbatch $0 -f compression,readability             # Run compression and readability"
     echo "  sbatch $0 -f final_model                         # Run only the final combined model"
+    echo "  sbatch $0 -f optimal                             # Run only the optimal 16-feature model"
     echo ""
     echo "SLURM Examples:"
     echo "  sbatch --job-name=compression $0 -f compression  # Custom job name"
@@ -586,6 +593,8 @@ main() {
         "neologism:centuries:century"
         "final_model:decades:decade"
         "final_model:centuries:century"
+        "optimal:decades:decade"
+        "optimal:centuries:century"
     )
 
     # Filter workflows based on selected features
@@ -612,7 +621,7 @@ main() {
     # Validate that we have workflows to run
     if [[ ${#workflows[@]} -eq 0 ]]; then
         log "ERROR: No valid feature types selected or found"
-        log "Available feature types: compression, lexical_structure, readability, distance, neologism, final_model"
+        log "Available feature types: compression, lexical_structure, readability, distance, neologism, final_model, optimal"
         exit 1
     fi
 

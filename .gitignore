@@ -230,7 +230,8 @@ NN*
 Extracted_features/
 feature_analysis_results/
 feature_importance_results/
-
+Feature_Importance_Analysis/
+feature_importance_results_optimal
 # Thesis git repository (nested repo)
 Thesis/
 

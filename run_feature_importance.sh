@@ -25,7 +25,7 @@ TARGET_COL="century"
 DROP_COLS="text,file_name,id"
 
 # Model filtering (default: all feature types with catboost and xgboost)
-MODEL_FILTER="compression,lexical_structure,readability,distance,neologism,final_model"
+MODEL_FILTER="optimal,compression,lexical_structure,readability,distance,neologism,final_model"
 
 # Analysis flags (all enabled by default)
 RUN_TREE=true
