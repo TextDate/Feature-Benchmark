@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 """
-Comprehensive Model Comparison Plotting Script for TextDate Feature-Benchmark Project
+Model Comparison Plotting Script for TextDate Feature-Benchmark Project
 
 This script analyzes and visualizes model results to compare:
 - Between Datasets: test vs gutenberg vs validation datasets
@@ -8,9 +7,6 @@ This script analyzes and visualizes model results to compare:
 - Between Models: random_forest, xgboost, catboost, svm, gnb, knn
 - Between Time Scales: decades vs centuries performance
 - Binary vs Base Models: base model results vs binary model results
-
-Author: Claude AI Assistant
-Date: September 2025
 """
 
 import argparse
@@ -75,6 +71,7 @@ class ModelResultsAnalyzer:
             base_dir: Base directory containing Saved_models_results and Saved_models_binary
             output_dir: Directory to save plots (default: base_dir/comparison_plots)
         """
+        
         self.base_dir = Path(base_dir)
         self.output_dir = Path(output_dir) if output_dir else self.base_dir / "comparison_plots"
         self.output_dir.mkdir(exist_ok=True)
@@ -82,7 +79,7 @@ class ModelResultsAnalyzer:
         # Define constants first
         self.FEATURE_TYPES = ['compression', 'lexical_structure', 'readability', 'distance', 'neologism', 'final_model']
         self.TIME_SCALES = ['decades', 'centuries']
-        self.BASE_MODELS = ['random_forest', 'xgboost', 'catboost', 'svm', 'gnb', 'knn']
+        self.BASE_MODELS = ['random_forest', 'xgboost', 'catboost', 'knn','svm', 'gnb']
         self.DATASETS = ['validation','test', 'gutenberg']
 
         # Create subdirectories for different plot types
