@@ -109,12 +109,12 @@ class ModelResultsAnalyzer:
         self.BASE_METRICS = [
             'accuracy', 'f1_macro', 'f1_weighted', 'recall_macro', 'recall_weighted',
             'precision_macro', 'precision_weighted', 'rmse', 'mae', 'r2', 'auc_roc',
-            'auprc', 'top3_accuracy', 'top5_accuracy', 'top10_accuracy'
+            'auprc', "top2_accuracy" ,'top3_accuracy', 'top5_accuracy', 'top10_accuracy'
         ]
 
         self.BINARY_METRICS = [
             'accuracy', 'auc_roc', 'auprc', 'f1_macro', 'f1_weighted',
-            'recall_macro', 'recall_weighted', 'precision_macro', 'precision_weighted'
+            'recall_macro', 'recall_weighted', 'precision_macro', 'precision_weighted',
         ]
 
         # Color schemes
