@@ -538,6 +538,662 @@ class ModelResultsAnalyzer:
 
         return figures
 
+    def create_binary_threshold_performance_plot_individual(self, feature_type: str = 'final_model',
+                                                          time_scale: str = 'decades',
+                                                          model: str = 'catboost',
+                                                          figsize: Tuple[int, int] = (24, 8)) -> plt.Figure:
+        """
+        Create clean binary classification performance plot for a single model across datasets.
+        Shows how performance varies across temporal thresholds.
+
+        Args:
+            feature_type: Feature type to analyze
+            time_scale: 'decades' or 'centuries'
+            model: Single model to analyze ('catboost', 'xgboost', etc.)
+            figsize: Figure size
+
+        Returns:
+            Figure with threshold performance plots
+        """
+        logger.info(f"Creating binary threshold performance plot for {model} {feature_type} ({time_scale})")
+
+        if (feature_type not in self.binary_results or
+            time_scale not in self.binary_results[feature_type]):
+            logger.warning(f"No binary results found for {feature_type} {time_scale}")
+            return None
+
+        # Create wider subplot grid with more horizontal space
+        fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+        # Increase spacing between subplots - maximize plot area with minimal top spacing
+        plt.subplots_adjust(hspace=0.3, wspace=0.2, top=0.92, bottom=0.15, left=0.06, right=0.94)
+
+        # Enable subtle grid that appears behind lines
+        plt.rcParams['axes.grid'] = True
+
+        # Define metrics to plot with clear descriptions
+        metrics = ['accuracy', 'f1_macro']
+        colors = {'accuracy': '#1f77b4', 'f1_macro': '#ff7f0e'}
+
+        # Define datasets
+        datasets = self.DATASETS
+        ax2_first = None  # Store reference to first subplot's secondary axis for legend
+
+        for dataset_idx, dataset in enumerate(datasets):
+            ax = axes[dataset_idx]
+
+            if dataset in self.binary_results[feature_type][time_scale]:
+                df = self.binary_results[feature_type][time_scale][dataset]
+                model_data = df[df['model'].str.contains(model, na=False)]
+
+                if not model_data.empty:
+                    # Get all data for this dataset (not just the specific model)
+                    full_data = df
+
+                    # Extract thresholds and convert to appropriate scale
+                    if 'threshold' in full_data.columns:
+                        thresholds = sorted(full_data['threshold'].unique())
+                        if time_scale == 'centuries':
+                            # Convert year thresholds to century scale
+                            thresholds = [t/100 for t in thresholds]
+
+                    # Plot performance metrics using real data for the specific model
+                    model_subset = full_data[full_data['model'].str.contains(model, na=False)]
+                    if not model_subset.empty:
+                        for metric in metrics:
+                            if metric in model_subset.columns:
+                                # Get threshold values for plotting
+                                plot_thresholds = model_subset['threshold'].values
+                                if time_scale == 'centuries':
+                                    plot_thresholds = plot_thresholds / 100
+
+                                metric_values = model_subset[metric].values
+
+                                # Set line style based on metric
+                                if metric == 'accuracy':
+                                    linestyle = '-'  # solid line
+                                elif metric == 'f1_macro':
+                                    linestyle = ':'  # dotted line
+                                else:
+                                    linestyle = '-'
+
+                                ax.plot(plot_thresholds, metric_values,
+                                       label=metric.replace('_', ' ').title(),
+                                       color=colors[metric], linewidth=3.5, alpha=0.9,
+                                       linestyle=linestyle, zorder=2)
+
+                    # Plot random baseline using real random classifier results
+                    random_data = full_data[full_data['model'] == 'random']
+                    if not random_data.empty and 'accuracy' in random_data.columns:
+                        random_thresholds = random_data['threshold'].values
+                        if time_scale == 'centuries':
+                            random_thresholds = random_thresholds / 100
+                        random_accuracy = random_data['accuracy'].values
+
+                        ax.plot(random_thresholds, random_accuracy, '-', color='red',
+                               alpha=0.7, label='Random', linewidth=3, zorder=2)
+
+                    # Add real percentage of texts using actual data
+                    if '%_of_texts' in model_subset.columns:
+                        plot_thresholds = model_subset['threshold'].values
+                        if time_scale == 'centuries':
+                            plot_thresholds = plot_thresholds / 100
+                        pct_texts = model_subset['%_of_texts'].values
+
+                        ax2 = ax.twinx()
+                        ax2.plot(plot_thresholds, pct_texts, '--', color='green', alpha=0.8,
+                               label='% of Texts', linewidth=3, zorder=2)
+                        ax2.set_ylabel('% of Texts', fontsize=13, fontweight='bold', alpha=0.8)
+                        ax2.set_ylim(0, 1)
+                        ax2.tick_params(axis='y', labelsize=11)
+                        ax2.grid(False)  # Disable grid on secondary axis to avoid overlap
+
+                        # Store reference for legend
+                        if dataset_idx == 0:
+                            ax2_first = ax2
+
+            # Customize subplot with larger fonts and better spacing
+            ax.set_title(f'{dataset.title()} Dataset', fontsize=16, fontweight='bold', pad=20)
+            ax.set_xlabel('Temporal Threshold', fontsize=14, fontweight='bold')
+            if dataset_idx == 0:
+                ax.set_ylabel('Performance Score', fontsize=14, fontweight='bold')
+
+            # Clean styling with subtle grid behind lines
+            ax.set_ylim(0, 1.05)
+            ax.tick_params(axis='both', labelsize=12)
+            ax.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)  # Subtle grid behind lines
+
+            # Add subtle background
+            ax.set_facecolor('#fafafa')
+
+            # Add legend to the first subplot at top left, aligned with title
+            if dataset_idx == 0:  # First subplot
+                # Get legends from main axis
+                lines1, labels1 = ax.get_legend_handles_labels()
+
+                # Get legends from secondary axis if it exists
+                lines2, labels2 = [], []
+                if ax2_first is not None:
+                    lines2, labels2 = ax2_first.get_legend_handles_labels()
+
+                # Combine legends from both axes
+                all_lines = lines1 + lines2
+                all_labels = labels1 + labels2
+
+                legend = ax.legend(all_lines, all_labels, bbox_to_anchor=(0, 1.30), loc='upper left', fontsize=12,
+                                 frameon=True, fancybox=True, shadow=True, ncol=3)
+                legend.get_frame().set_facecolor('white')
+                legend.get_frame().set_alpha(0.95)
+
+        # Add title centered at the top
+        main_title = f'{model.upper()} Binary Classification Performance\n{feature_type.replace("_", " ").title()} Features - {time_scale.title()} Scale'
+
+        # Position title using fig.text at the very top edge
+        fig.text(0.5, 1.06, main_title, ha='center', va='bottom', fontsize=20, fontweight='bold')
+
+        # Don't use tight_layout since we're manually adjusting
+
+        # Save plot
+        filename = f"binary_threshold_performance_{model}_{feature_type}_{time_scale}.png"
+        save_path = self.binary_dir / time_scale / filename
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved binary threshold plot: binary_comparisons/{time_scale}/{filename}")
+
+        # Restore default grid setting
+        plt.rcParams['axes.grid'] = True
+
+        return fig
+
+    def create_temporal_evolution_analysis(self, feature_type: str = 'final_model',
+                                         time_scale: str = 'decades',
+                                         figsize: Tuple[int, int] = (20, 12)) -> plt.Figure:
+        """
+        Create comprehensive temporal evolution analysis showing how performance
+        evolves across historical periods for all datasets and key metrics.
+
+        Args:
+            feature_type: Feature type to analyze
+            time_scale: 'decades' or 'centuries'
+            figsize: Figure size
+
+        Returns:
+            Figure with temporal evolution analysis
+        """
+        logger.info(f"Creating temporal evolution analysis for {feature_type} ({time_scale})")
+
+        if (feature_type not in self.binary_results or
+            time_scale not in self.binary_results[feature_type]):
+            logger.warning(f"No binary results found for {feature_type} {time_scale}")
+            return None
+
+        # Create subplot grid: 3 rows, 2 columns
+        fig, axes = plt.subplots(3, 2, figsize=figsize)
+        fig.suptitle(f'Temporal Evolution Analysis: {feature_type.replace("_", " ").title()} Features ({time_scale.title()})',
+                    fontsize=20, fontweight='bold', y=0.98)
+
+        # Adjust spacing
+        plt.subplots_adjust(hspace=0.35, wspace=0.25, top=0.93, bottom=0.08, left=0.08, right=0.95)
+
+        # Define metrics to analyze
+        metrics = ['accuracy', 'f1_macro', 'auc_roc', 'auprc']
+        metric_titles = ['Accuracy', 'F1-Macro', 'AUC-ROC', 'AUPRC']
+        datasets = self.DATASETS
+        colors = {'validation': '#1f77b4', 'test': '#ff7f0e', 'gutenberg': '#2ca02c'}
+
+        # Plot each metric (4 metrics, so use 4 of the 6 subplots)
+        for idx, (metric, title) in enumerate(zip(metrics, metric_titles)):
+            row = idx // 2
+            col = idx % 2
+            ax = axes[row, col]
+
+            for dataset in datasets:
+                if dataset in self.binary_results[feature_type][time_scale]:
+                    df = self.binary_results[feature_type][time_scale][dataset]
+
+                    # Use CatBoost as primary model for temporal analysis
+                    model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                    if not model_data.empty and metric in model_data.columns:
+                        thresholds = model_data['threshold'].values
+                        if time_scale == 'centuries':
+                            thresholds = thresholds / 100  # Convert to century scale
+
+                        metric_values = model_data[metric].values
+
+                        ax.plot(thresholds, metric_values, '-',
+                               color=colors[dataset], linewidth=2.5, alpha=0.8,
+                               label=f'{dataset.title()}', zorder=2)
+
+            # Customize subplot
+            ax.set_title(title, fontsize=14, fontweight='bold')
+            ax.set_xlabel('Temporal Threshold', fontsize=12)
+            ax.set_ylabel(title, fontsize=12)
+            ax.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+            ax.legend()
+            ax.set_ylim(0, 1.05)
+
+        # Use remaining 2 subplots for special analysis
+        # Row 2, Col 0: Class Distribution Evolution
+        ax_dist = axes[2, 0]
+        for dataset in datasets:
+            if dataset in self.binary_results[feature_type][time_scale]:
+                df = self.binary_results[feature_type][time_scale][dataset]
+                model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                if not model_data.empty and '%_of_texts' in model_data.columns:
+                    thresholds = model_data['threshold'].values
+                    if time_scale == 'centuries':
+                        thresholds = thresholds / 100
+
+                    pct_texts = model_data['%_of_texts'].values
+
+                    ax_dist.plot(thresholds, pct_texts, '--',
+                               color=colors[dataset], linewidth=2.5, alpha=0.8,
+                               label=f'{dataset.title()}', zorder=2)
+
+        ax_dist.set_title('Class Distribution Evolution\n(% Texts Labeled as "Old")', fontsize=14, fontweight='bold')
+        ax_dist.set_xlabel('Temporal Threshold', fontsize=12)
+        ax_dist.set_ylabel('Percentage of Texts', fontsize=12)
+        ax_dist.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+        ax_dist.legend()
+        ax_dist.set_ylim(0, 1.05)
+
+        # Row 2, Col 1: Performance Stability Analysis (coefficient of variation)
+        ax_stability = axes[2, 1]
+        stability_metrics = ['accuracy', 'f1_macro', 'auc_roc', 'auprc']
+        dataset_stability = {}
+
+        for dataset in datasets:
+            if dataset in self.binary_results[feature_type][time_scale]:
+                df = self.binary_results[feature_type][time_scale][dataset]
+                model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                if not model_data.empty:
+                    cv_values = []
+                    for metric in stability_metrics:
+                        if metric in model_data.columns:
+                            values = model_data[metric].values
+                            cv = np.std(values) / np.mean(values)  # Coefficient of variation
+                            cv_values.append(cv)
+
+                    dataset_stability[dataset] = np.mean(cv_values)
+
+        # Bar plot of stability
+        if dataset_stability:
+            datasets_stable = list(dataset_stability.keys())
+            cv_values = list(dataset_stability.values())
+            bars = ax_stability.bar(datasets_stable, cv_values,
+                                  color=[colors[d] for d in datasets_stable], alpha=0.7)
+
+            ax_stability.set_title('Performance Stability Across Thresholds\n(Lower = More Stable)',
+                                 fontsize=14, fontweight='bold')
+            ax_stability.set_ylabel('Coefficient of Variation', fontsize=12)
+            ax_stability.tick_params(axis='x', rotation=45)
+
+            # Add value labels on bars
+            for bar, val in zip(bars, cv_values):
+                ax_stability.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
+                                f'{val:.3f}', ha='center', va='bottom', fontweight='bold')
+
+        return fig
+
+    def create_cross_dataset_performance_comparison(self, feature_type: str = 'final_model',
+                                                  time_scale: str = 'decades',
+                                                  figsize: Tuple[int, int] = (15, 10)) -> plt.Figure:
+        """
+        Create cross-dataset performance comparison highlighting Gutenberg differences
+        and explaining domain adaptation challenges.
+
+        Args:
+            feature_type: Feature type to analyze
+            time_scale: 'decades' or 'centuries'
+            figsize: Figure size
+
+        Returns:
+            Figure with cross-dataset analysis
+        """
+        logger.info(f"Creating cross-dataset comparison for {feature_type} ({time_scale})")
+
+        if (feature_type not in self.binary_results or
+            time_scale not in self.binary_results[feature_type]):
+            logger.warning(f"No binary results found for {feature_type} {time_scale}")
+            return None
+
+        # Create subplot grid: 2 rows, 3 columns (but only use 5 subplots)
+        fig, axes = plt.subplots(2, 3, figsize=figsize)
+        fig.suptitle(f'Cross-Dataset Performance Analysis: {feature_type.replace("_", " ").title()} ({time_scale.title()})',
+                    fontsize=18, fontweight='bold', y=0.95)
+
+        # Remove the last subplot (bottom right) that was used for optimal thresholds
+        fig.delaxes(axes[1, 2])
+
+        # Adjust spacing
+        plt.subplots_adjust(hspace=0.35, wspace=0.25, top=0.90, bottom=0.08, left=0.08, right=0.95)
+
+        datasets = self.DATASETS
+        colors = {'validation': '#1f77b4', 'test': '#ff7f0e', 'gutenberg': '#d62728'}
+        metrics = ['accuracy', 'f1_macro', 'auc_roc']
+
+        # First row: Performance curves for key metrics
+        for idx, metric in enumerate(metrics):
+            ax = axes[0, idx]
+
+            for dataset in datasets:
+                if dataset in self.binary_results[feature_type][time_scale]:
+                    df = self.binary_results[feature_type][time_scale][dataset]
+                    model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                    if not model_data.empty and metric in model_data.columns:
+                        thresholds = model_data['threshold'].values
+                        if time_scale == 'centuries':
+                            thresholds = thresholds / 100
+
+                        metric_values = model_data[metric].values
+
+                        # Highlight Gutenberg with different line style
+                        linestyle = '--' if dataset == 'gutenberg' else '-'
+                        linewidth = 3 if dataset == 'gutenberg' else 2.5
+
+                        ax.plot(thresholds, metric_values, linestyle,
+                               color=colors[dataset], linewidth=linewidth, alpha=0.8,
+                               label=f'{dataset.title()}', zorder=2)
+
+            ax.set_title(f'{metric.replace("_", " ").title()}', fontsize=14, fontweight='bold')
+            ax.set_xlabel('Temporal Threshold', fontsize=12)
+            ax.set_ylabel(metric.replace("_", " ").title(), fontsize=12)
+            ax.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+            ax.legend()
+            ax.set_ylim(0, 1.05)
+
+            # Set custom x-axis labels for centuries
+            if time_scale == 'centuries':
+                ax.set_xticks([0.18, 0.19, 0.20])
+                ax.set_xticklabels(['18', '19', '20'])
+
+        # Second row: Specialized analysis
+        # Performance gap analysis
+        ax_gap = axes[1, 0]
+        for metric in ['accuracy', 'f1_macro']:
+            test_data = self.binary_results[feature_type][time_scale].get('test')
+            gutenberg_data = self.binary_results[feature_type][time_scale].get('gutenberg')
+
+            if test_data is not None and gutenberg_data is not None:
+                test_model = test_data[test_data['model'].str.contains('catboost', na=False)]
+                gutenberg_model = gutenberg_data[gutenberg_data['model'].str.contains('catboost', na=False)]
+
+                if not test_model.empty and not gutenberg_model.empty and metric in test_model.columns:
+                    test_thresholds = test_model['threshold'].values
+                    if time_scale == 'centuries':
+                        test_thresholds = test_thresholds / 100
+
+                    test_values = test_model[metric].values
+                    gutenberg_values = gutenberg_model[metric].values
+
+                    # Calculate performance gap
+                    gap = test_values - gutenberg_values
+
+                    ax_gap.plot(test_thresholds, gap, '-',
+                               linewidth=2.5, alpha=0.8,
+                               label=f'{metric.replace("_", " ").title()} Gap', zorder=2)
+
+        ax_gap.set_title('Performance Gap\n(Test - Gutenberg)', fontsize=14, fontweight='bold')
+        ax_gap.set_xlabel('Temporal Threshold', fontsize=12)
+        ax_gap.set_ylabel('Performance Gap', fontsize=12)
+        ax_gap.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+        ax_gap.legend()
+        ax_gap.axhline(y=0, color='black', linestyle='--', alpha=0.5)
+
+        # Set custom x-axis labels for centuries
+        if time_scale == 'centuries':
+            ax_gap.set_xticks([0.18, 0.19, 0.20])
+            ax_gap.set_xticklabels(['18', '19', '20'])
+
+        # Class distribution comparison
+        ax_class = axes[1, 1]
+        for dataset in datasets:
+            if dataset in self.binary_results[feature_type][time_scale]:
+                df = self.binary_results[feature_type][time_scale][dataset]
+                model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                if not model_data.empty and '%_of_texts' in model_data.columns:
+                    thresholds = model_data['threshold'].values
+                    if time_scale == 'centuries':
+                        thresholds = thresholds / 100
+
+                    pct_texts = model_data['%_of_texts'].values
+
+                    linestyle = '--' if dataset == 'gutenberg' else '-'
+                    linewidth = 3 if dataset == 'gutenberg' else 2.5
+
+                    ax_class.plot(thresholds, pct_texts, linestyle,
+                                color=colors[dataset], linewidth=linewidth, alpha=0.8,
+                                label=f'{dataset.title()}', zorder=2)
+
+        ax_class.set_title('Class Distribution Comparison\n(% Texts Labeled "Old")', fontsize=14, fontweight='bold')
+        ax_class.set_xlabel('Temporal Threshold', fontsize=12)
+        ax_class.set_ylabel('Percentage', fontsize=12)
+        ax_class.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+        ax_class.legend()
+        ax_class.set_ylim(0, 1.05)
+
+        # Set custom x-axis labels for centuries
+        if time_scale == 'centuries':
+            ax_class.set_xticks([0.18, 0.19, 0.20])
+            ax_class.set_xticklabels(['18', '19', '20'])
+
+        return fig
+
+    def create_feature_domain_temporal_sensitivity(self, time_scale: str = 'decades',
+                                                 figsize: Tuple[int, int] = (20, 14)) -> plt.Figure:
+        """
+        Create feature domain temporal sensitivity analysis showing how different
+        feature types respond to temporal boundary changes.
+
+        Args:
+            time_scale: 'decades' or 'centuries'
+            figsize: Figure size
+
+        Returns:
+            Figure with feature domain sensitivity analysis
+        """
+        logger.info(f"Creating feature domain temporal sensitivity analysis ({time_scale})")
+
+        # Get available feature types (excluding optimal which might not have full data)
+        feature_types = [ft for ft in self.binary_results.keys() if ft != 'optimal']
+
+        if not feature_types:
+            logger.warning(f"No feature types found for {time_scale}")
+            return None
+
+        # Create subplot grid: 3 rows, 3 columns
+        fig, axes = plt.subplots(3, 3, figsize=figsize)
+        fig.suptitle(f'Feature Domain Temporal Sensitivity Analysis ({time_scale.title()})',
+                    fontsize=20, fontweight='bold', y=0.98)
+
+        # Adjust spacing
+        plt.subplots_adjust(hspace=0.4, wspace=0.25, top=0.93, bottom=0.08, left=0.08, right=0.95)
+
+        # Define colors for feature types
+        feature_colors = {
+            'compression': '#1f77b4',
+            'lexical_structure': '#ff7f0e',
+            'readability': '#2ca02c',
+            'distance': '#d62728',
+            'neologism': '#9467bd',
+            'final_model': '#8c564b'
+        }
+
+        # First 6 subplots: Individual feature domain analysis
+        for idx, feature_type in enumerate(feature_types[:6]):
+            if idx >= 6:  # Only use first 6 subplots
+                break
+
+            row = idx // 3
+            col = idx % 3
+            ax = axes[row, col]
+
+            if (feature_type in self.binary_results and
+                time_scale in self.binary_results[feature_type]):
+
+                # Use test dataset for primary analysis
+                if 'test' in self.binary_results[feature_type][time_scale]:
+                    df = self.binary_results[feature_type][time_scale]['test']
+                    model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                    if not model_data.empty:
+                        thresholds = model_data['threshold'].values
+                        if time_scale == 'centuries':
+                            thresholds = thresholds / 100
+
+                        # Plot multiple metrics for this feature
+                        for metric, alpha in [('accuracy', 1.0), ('auc_roc', 0.8), ('auprc', 0.6)]:
+                            if metric in model_data.columns:
+                                metric_values = model_data[metric].values
+                                ax.plot(thresholds, metric_values, '-',
+                                       color=feature_colors.get(feature_type, '#000000'),
+                                       linewidth=2.5, alpha=alpha,
+                                       label=metric.replace('_', ' ').title(), zorder=2)
+
+            ax.set_title(f'{feature_type.replace("_", " ").title()}', fontsize=12, fontweight='bold')
+            ax.set_xlabel('Temporal Threshold', fontsize=10)
+            ax.set_ylabel('Performance', fontsize=10)
+            ax.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+            ax.legend(fontsize=9)
+            ax.set_ylim(0, 1.05)
+
+        # Remaining subplots: Comparative analysis
+        # Feature stability comparison (row 2, col 0)
+        ax_stability = axes[2, 0]
+        stability_scores = {}
+
+        for feature_type in feature_types:
+            if (feature_type in self.binary_results and
+                time_scale in self.binary_results[feature_type] and
+                'test' in self.binary_results[feature_type][time_scale]):
+
+                df = self.binary_results[feature_type][time_scale]['test']
+                model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                if not model_data.empty and 'accuracy' in model_data.columns:
+                    accuracy_values = model_data['accuracy'].values
+                    # Calculate coefficient of variation as stability measure
+                    cv = np.std(accuracy_values) / np.mean(accuracy_values)
+                    stability_scores[feature_type] = cv
+
+        if stability_scores:
+            features = list(stability_scores.keys())
+            cv_values = list(stability_scores.values())
+            bars = ax_stability.bar(features, cv_values,
+                                  color=[feature_colors.get(f, '#000000') for f in features], alpha=0.7)
+
+            ax_stability.set_title('Temporal Stability\n(Lower = More Stable)', fontsize=12, fontweight='bold')
+            ax_stability.set_ylabel('Coefficient of Variation', fontsize=10)
+            ax_stability.tick_params(axis='x', rotation=45, labelsize=9)
+
+            for bar, val in zip(bars, cv_values):
+                ax_stability.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.001,
+                                f'{val:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=8)
+
+        # Optimal threshold comparison (row 2, col 1)
+        ax_optimal = axes[2, 1]
+        optimal_thresholds = {}
+
+        for feature_type in feature_types:
+            if (feature_type in self.binary_results and
+                time_scale in self.binary_results[feature_type] and
+                'test' in self.binary_results[feature_type][time_scale]):
+
+                df = self.binary_results[feature_type][time_scale]['test']
+                model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                if not model_data.empty and 'accuracy' in model_data.columns:
+                    thresholds = model_data['threshold'].values
+                    if time_scale == 'centuries':
+                        thresholds = thresholds / 100
+
+                    accuracy_values = model_data['accuracy'].values
+                    optimal_idx = np.argmax(accuracy_values)
+                    optimal_threshold = thresholds[optimal_idx]
+                    optimal_thresholds[feature_type] = optimal_threshold
+
+        if optimal_thresholds:
+            features = list(optimal_thresholds.keys())
+            thresholds_opt = list(optimal_thresholds.values())
+            bars = ax_optimal.bar(features, thresholds_opt,
+                                color=[feature_colors.get(f, '#000000') for f in features], alpha=0.7)
+
+            ax_optimal.set_title('Optimal Temporal Thresholds\nby Feature Domain', fontsize=12, fontweight='bold')
+            ax_optimal.set_ylabel('Optimal Threshold', fontsize=10)
+            ax_optimal.tick_params(axis='x', rotation=45, labelsize=9)
+
+            for bar, threshold in zip(bars, thresholds_opt):
+                ax_optimal.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                              f'{threshold:.0f}', ha='center', va='bottom', fontweight='bold', fontsize=8)
+
+        # Peak performance comparison (row 2, col 2)
+        ax_peak = axes[2, 2]
+        peak_performance = {}
+
+        for feature_type in feature_types:
+            if (feature_type in self.binary_results and
+                time_scale in self.binary_results[feature_type] and
+                'test' in self.binary_results[feature_type][time_scale]):
+
+                df = self.binary_results[feature_type][time_scale]['test']
+                model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                if not model_data.empty and 'accuracy' in model_data.columns:
+                    accuracy_values = model_data['accuracy'].values
+                    peak_performance[feature_type] = np.max(accuracy_values)
+
+        if peak_performance:
+            features = list(peak_performance.keys())
+            peak_values = list(peak_performance.values())
+            bars = ax_peak.bar(features, peak_values,
+                             color=[feature_colors.get(f, '#000000') for f in features], alpha=0.7)
+
+            ax_peak.set_title('Peak Performance\nby Feature Domain', fontsize=12, fontweight='bold')
+            ax_peak.set_ylabel('Peak Accuracy', fontsize=10)
+            ax_peak.tick_params(axis='x', rotation=45, labelsize=9)
+            ax_peak.set_ylim(0.5, 1.05)
+
+            for bar, peak in zip(bars, peak_values):
+                ax_peak.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.005,
+                           f'{peak:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=8)
+
+        return fig
+
+    def _simulate_threshold_curve(self, thresholds: np.ndarray, base_performance: float,
+                                time_scale: str) -> np.ndarray:
+        """
+        Simulate realistic threshold performance curve.
+        In real implementation, this would use actual threshold sweep data.
+        """
+        n_points = len(thresholds)
+
+        if time_scale == 'decades':
+            # For decades, performance varies more with threshold
+            # Create a curve that shows optimal performance around 1850-1900
+            center = len(thresholds) // 2
+            distance_from_center = np.abs(np.arange(n_points) - center)
+
+            # Bell-like curve with some noise
+            curve = base_performance * (1 - 0.3 * (distance_from_center / center) ** 2)
+            noise = np.random.normal(0, 0.02, n_points)
+            curve += noise
+
+        else:
+            # For centuries, more stable performance
+            curve = np.full(n_points, base_performance)
+            # Add slight variation
+            noise = np.random.normal(0, 0.01, n_points)
+            curve += noise
+
+        # Ensure values are in valid range
+        curve = np.clip(curve, 0.3, 1.0)
+
+        return curve
+
     def create_comprehensive_report(self, metrics: List[str] = None):
         """Create comprehensive report with all visualizations."""
         if metrics is None:
@@ -575,6 +1231,18 @@ class ModelResultsAnalyzer:
                         report_summary['plots_created'].append(f'binary_comparisons/{time_scale}/binary_model_comparison_{metric}.png')
                         report_summary['total_plots'] += 1
                     plt.close(fig)
+
+            # Create individual binary threshold performance plots for each model
+            for model in ['catboost', 'xgboost']:
+                fig = self.create_binary_threshold_performance_plot_individual(
+                    feature_type='final_model',
+                    time_scale=time_scale,
+                    model=model
+                )
+                if fig is not None:
+                    report_summary['plots_created'].append(f'binary_comparisons/{time_scale}/binary_threshold_performance_{model}_final_model_{time_scale}.png')
+                    report_summary['total_plots'] += 1
+                plt.close(fig)
 
             # Create dataset comparisons (only for binary metrics)
             for metric in metrics:
