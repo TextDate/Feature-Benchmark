@@ -33,7 +33,7 @@ mkdir -p logs
 
 # Default values
 BASE_DIR="$(pwd)"
-OUTPUT_DIR="feature_analysis_results"
+OUTPUT_DIR="Results/feature_analysis"
 TARGET="decade"
 MODE="both"
 EXCLUDE_VALUES=""
@@ -49,16 +49,19 @@ GUTENBERG_CSV="Extracted_features/gutenberg_features_cleaned_*.csv"
 
 # Script paths
 FEATURE_PLOTTER="Plotting/feature_plotter.py"
-COMBINE_PLOTTER="Plotting/combine_feature_plots.py"
 
 # ==================== UTILITY FUNCTIONS ====================
 
 log_info() {
-    echo "[$(date '+%H:%M:%S')] INFO: $*"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $*"
 }
 
 log_error() {
-    echo "[$(date '+%H:%M:%S')] ERROR: $*" >&2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" >&2
+}
+
+log_success() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $*"
 }
 
 # Find most recent feature files
@@ -79,11 +82,6 @@ validate_environment() {
 
     if [ ! -f "$BASE_DIR/$FEATURE_PLOTTER" ]; then
         log_error "Feature plotting script not found: $FEATURE_PLOTTER"
-        exit 1
-    fi
-
-    if [ ! -f "$BASE_DIR/$COMBINE_PLOTTER" ]; then
-        log_error "Combine plotting script not found: $COMBINE_PLOTTER"
         exit 1
     fi
 
@@ -133,7 +131,7 @@ run_individual_plotting() {
     [ -n "$TEST_FILE" ] && { csvs+=("$TEST_FILE"); labels+=("test"); }
     [ -n "$GUTENBERG_FILE" ] && { csvs+=("$GUTENBERG_FILE"); labels+=("gutenberg"); }
 
-    local cmd="python3 $BASE_DIR/$FEATURE_PLOTTER"
+    local cmd="python3 $BASE_DIR/$FEATURE_PLOTTER plot"
     cmd="$cmd --csvs ${csvs[*]}"
     cmd="$cmd --labels ${labels[*]}"
     cmd="$cmd --target $TARGET"
@@ -150,7 +148,7 @@ run_individual_plotting() {
         exit 1
     }
 
-    log_info "Individual plotting completed successfully"
+    log_success "Individual plotting completed"
 }
 
 # Generate combined comparison plots
@@ -164,7 +162,7 @@ run_combined_plotting() {
         exit 1
     fi
 
-    local cmd="python3 $BASE_DIR/$COMBINE_PLOTTER"
+    local cmd="python3 $BASE_DIR/$FEATURE_PLOTTER combine"
     cmd="$cmd --train_dir $individual_dir/train"
     cmd="$cmd --val_dir $individual_dir/validation"
     cmd="$cmd --test_dir $individual_dir/test"
@@ -179,7 +177,7 @@ run_combined_plotting() {
         exit 1
     }
 
-    log_info "Combined plotting completed successfully"
+    log_success "Combined plotting completed"
 }
 
 # Main execution function
@@ -216,7 +214,7 @@ Usage: $0 [OPTIONS]
 OPTIONS:
   --target TARGET         Target column to group by (decade|century) [default: decade]
   --mode MODE            Analysis mode (individual|combined|both) [default: both]
-  --output-dir DIR       Output directory [default: feature_analysis_results]
+  --output-dir DIR       Output directory [default: Results/feature_analysis]
   --exclude-values VALS  Values to exclude (space-separated, e.g., 1600 1610)
   --verbose             Enable verbose output
   --help, -h            Show this help
@@ -296,4 +294,4 @@ validate_environment
 find_feature_files
 run_analysis
 
-log_info "Feature analysis completed successfully - Results in: $OUTPUT_DIR"
+log_success "Feature analysis completed - Results in: $OUTPUT_DIR"

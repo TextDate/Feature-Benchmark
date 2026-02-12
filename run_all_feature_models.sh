@@ -4,43 +4,39 @@
 #SBATCH --error=logs/all_feature_models_%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=48
+#SBATCH --cpus-per-task=32
 #SBATCH --gres=gpu:0
 #SBATCH --mem=200GB
 #SBATCH --partition=cpu
 #SBATCH --time=48:00:00
 
-# Master SLURM Script for Feature-Specific Base and Binary Models
-# Supports selective execution of feature types: compression, lexical_structure, readability, distance, neologism, final_model, optimal
-# For both decades and centuries classification with base and binary models
-# Optimized for SLURM HPC environments with comprehensive error handling
+# Train and test all models (base + binary) for all feature subsets
+# Runs: compression, lexical_structure, readability, distance, neologism, final_model, optimal
+# Both decades and centuries classification
 #
-# Usage: sbatch [SLURM_OPTIONS] run_all_feature_models.sh [SCRIPT_OPTIONS]
-# Examples:
-#   sbatch run_all_feature_models.sh                    # Run all features
-#   sbatch run_all_feature_models.sh -f compression     # Run only compression
-#   sbatch run_all_feature_models.sh -f final_model     # Run only final model
+# Usage:
+#   sbatch run_all_feature_models.sh
+#   sbatch run_all_feature_models.sh -f compression
 
 set -e  # Exit on any error
 
-# Set up environment
+# ==================== ENVIRONMENT SETUP ====================
 source ../../virtual-venv/bin/activate
 export PYTHONPATH=$(pwd)
 export OPENBLAS_NUM_THREADS=2
+export OMP_NUM_THREADS=2
+
+# Create logs directory if it doesn't exist
+mkdir -p logs
 
 # ==================== SLURM INFO ====================
 echo "======================================================================="
-echo "MASTER FEATURE MODEL PIPELINE - ALL FEATURE TYPES"
+echo "FEATURE MODEL PIPELINE"
 echo "======================================================================="
 echo "Job ID: $SLURM_JOB_ID"
-echo "Job Name: $SLURM_JOB_NAME"
 echo "Node: $SLURM_NODELIST"
-echo "CPUs: $SLURM_CPUS_PER_TASK"
-echo "Memory: ${SLURM_MEM_PER_NODE}MB"
-echo "Start time: $(date)"
-echo "Binary Model Configuration:"
-echo "  - Decades: Top-$TOP_K_DECADES probability summing"
-echo "  - Centuries: Top-$TOP_K_CENTURIES probability summing"
+echo "CPUs: $SLURM_CPUS_PER_TASK | Memory: ${SLURM_MEM_PER_NODE}MB"
+echo "Start: $(date)"
 echo "======================================================================="
 
 # ==================== GLOBAL CONFIGURATION ====================
@@ -57,45 +53,22 @@ TOP_K_CENTURIES=1   # Top-K for century classification (5 classes)
 FEATURE_DIR="Extracted_features"
 LOG_DIR="logs"
 
-# Feature type configurations (DROP_COLS for each feature type)
-# Features used for training = All dataset features MINUS the drop_cols listed below
+# Feature configurations (columns to drop - everything else is used)
 declare -A FEATURE_CONFIGS
 
-# COMPRESSION MODEL FEATURES (7 features used):
-# Used: Compression_Ratio_Order_1, NRC_Order_1, Entropy_Ratio_Order_1, Shannon_Entropy,
-#       Compression_Ratio_Order_2, NRC_Order_2, Entropy_Ratio_Order_2
 FEATURE_CONFIGS[compression]="file_name,year,decade,century,Special_Character_Ratio,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
 
-# LEXICAL STRUCTURE MODEL FEATURES (6 features used):
-# Used: Avg_Word_Length, Lexical_Richness, Avg_Sentence_Length, Punctuation_Density,
-#       Syllable_Per_Word, Digit_Ratio
 FEATURE_CONFIGS[lexical_structure]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
 
-# READABILITY MODEL FEATURES (2 features used):
-# Used: Flesch_Readability, Stopword_Ratio
 FEATURE_CONFIGS[readability]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
 
-# DISTANCE MODEL FEATURES (17 features used):
-# Used: at, and, by, the, for, a, of, with, to, as, on, in, an, that, it, is, was
 FEATURE_CONFIGS[distance]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
 
-# NEOLOGISM MODEL FEATURES (11 features used):
-# Used: contains_early_modern_words, contains_industrial_words, contains_late_industrial_words,
-#       contains_early_20th_words, contains_post_war_words, contains_late_modern_words,
-#       contains_digital_dawn_words, contains_digital_native_words, contains_modern_vocabulary,
-#       contains_historical_vocabulary, vocabulary_modernity_score
 FEATURE_CONFIGS[neologism]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was"
 
-# FINAL MODEL FEATURES (36 features used):
-# Used: All features except file_name, year, decade, century, Special_Character_Ratio
-# Combines: 7 compression + 6 lexical structure + 2 readability + 17 distance + 11 neologism (fixed) = 43 total
 FEATURE_CONFIGS[final_model]="file_name,year,decade,century,Special_Character_Ratio"
 
-# OPTIMAL MODEL FEATURES (16 features used):
-# Used: Lexical_Richness, Syllable_Per_Word, Punctuation_Density, contains_late_industrial_words, Digit_Ratio, on,
-#       Avg_Sentence_Length, Avg_Word_Length, to, by, NRC_Order_2, Entropy_Ratio_Order_1, contains_early_20th_words,
-#       contains_historical_vocabulary, was, Stopword_Ratio
-FEATURE_CONFIGS[optimal]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,Entropy_Ratio_Order_2,Flesch_Readability,at,and,for,the,of,in,with,as,a,is,it,that,an,contains_early_modern_words,contains_industrial_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,vocabulary_modernity_score"
+FEATURE_CONFIGS[optimal]="file_name,year,decade,century,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Avg_Word_Length,Compression_Ratio_Order_2,Entropy_Ratio_Order_2,Flesch_Readability,Stopword_Ratio,of,the,a,and,in,with,to,is,at,an,that,for,was,it,as,contains_early_modern_words,contains_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
 
 # Execution order and progress tracking
 TOTAL_PHASES=28  # 7 feature types × 4 workflows (decades/centuries × base/binary)
@@ -104,19 +77,29 @@ OVERALL_START_TIME=$(date +%s)
 
 # ==================== UTILITY FUNCTIONS ====================
 
-log() {
+log_info() {
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
     local elapsed=$(($(date +%s) - OVERALL_START_TIME))
     local hours=$((elapsed / 3600))
     local minutes=$(((elapsed % 3600) / 60))
     local seconds=$((elapsed % 60))
-    echo "[$timestamp] [+${hours}h${minutes}m${seconds}s] $1"
+    echo "[$timestamp] [+${hours}h${minutes}m${seconds}s] INFO: $*"
+}
+
+log_error() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] ERROR: $*" >&2
+}
+
+log_success() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] SUCCESS: $*"
 }
 
 progress_update() {
     CURRENT_PHASE=$((CURRENT_PHASE + 1))
     local percentage=$((CURRENT_PHASE * 100 / TOTAL_PHASES))
-    log "========== PROGRESS: $CURRENT_PHASE/$TOTAL_PHASES ($percentage%) =========="
+    log_info "========== PROGRESS: $CURRENT_PHASE/$TOTAL_PHASES ($percentage%) =========="
 }
 
 # Function to find the latest timestamped file
@@ -127,7 +110,7 @@ find_latest_file() {
     latest_file=$(find "$FEATURE_DIR" -name "$pattern" -type f 2>/dev/null | sort -V | tail -1)
 
     if [[ -z "$latest_file" ]]; then
-        log "ERROR: No files found matching pattern: $pattern"
+        log_error " No files found matching pattern: $pattern"
         return 1
     fi
 
@@ -141,22 +124,22 @@ validate_file() {
     local description="$2"
 
     if [[ ! -f "$file" ]]; then
-        log "ERROR: $description file not found: $file"
+        log_error " $description file not found: $file"
         return 1
     fi
 
     if [[ ! -r "$file" ]]; then
-        log "ERROR: $description file not readable: $file"
+        log_error " $description file not readable: $file"
         return 1
     fi
 
     local size=$(stat -f%z "$file" 2>/dev/null || stat -c%s "$file" 2>/dev/null || echo "0")
     if [[ "$size" -eq 0 ]]; then
-        log "ERROR: $description file is empty: $file"
+        log_error " $description file is empty: $file"
         return 1
     fi
 
-    log " Validated $description file: $file ($(numfmt --to=iec $size))"
+    log_info " Validated $description file: $file ($(numfmt --to=iec $size))"
     return 0
 }
 
@@ -166,9 +149,9 @@ ensure_directory() {
     local description="$2"
 
     if [[ ! -d "$dir" ]]; then
-        log "Creating $description directory: $dir"
+        log_info "Creating $description directory: $dir"
         mkdir -p "$dir" || {
-            log "ERROR: Failed to create $description directory: $dir"
+            log_error " Failed to create $description directory: $dir"
             return 1
         }
     fi
@@ -182,7 +165,7 @@ validate_models() {
     local feature_type="$2"
     local missing_models=()
 
-    log "Validating trained model files for $feature_type..."
+    log_info "Validating trained model files for $feature_type..."
 
     for model in "${MODELS[@]}"; do
         local model_file="$model_dir/${model}_model.pkl"
@@ -193,20 +176,20 @@ validate_models() {
             if [[ "$size" -eq 0 ]]; then
                 missing_models+=("$model (empty)")
             else
-                log "   Found $model model: $(numfmt --to=iec $size)"
+                log_info "   Found $model model: $(numfmt --to=iec $size)"
             fi
         fi
     done
 
     if [[ ${#missing_models[@]} -gt 0 ]]; then
-        log "ERROR: Missing or empty model files for $feature_type:"
+        log_error " Missing or empty model files for $feature_type:"
         for model in "${missing_models[@]}"; do
-            log "  - $model"
+            log_info "  - $model"
         done
         return 1
     fi
 
-    log "All model files validated successfully for $feature_type"
+    log_info "All model files validated successfully for $feature_type"
     return 0
 }
 
@@ -220,12 +203,12 @@ run_base_training() {
     local drop_cols="${FEATURE_CONFIGS[$feature_type]}"
 
     progress_update
-    log "============================================"
-    log "PHASE $CURRENT_PHASE: Base Model Training"
-    log "Feature Type: $feature_type"
-    log "Time Scale: $time_scale"
-    log "Target: $target"
-    log "============================================"
+    log_info "============================================"
+    log_info "PHASE $CURRENT_PHASE: Base Model Training"
+    log_info "Feature Type: $feature_type"
+    log_info "Time Scale: $time_scale"
+    log_info "Target: $target"
+    log_info "============================================"
 
     # Find latest feature files
     local train_file
@@ -241,15 +224,15 @@ run_base_training() {
     # Ensure output directory exists
     ensure_directory "$model_dir" "Model output" || return 1
 
-    log "Training configuration:"
-    log "  Target: $target"
-    log "  Feature type: $feature_type"
-    log "  Models: ${MODELS[*]}"
-    log "  N-estimators: $N_ESTIMATORS"
-    log "  Drop columns: $drop_cols"
-    log "  Training file: $train_file"
-    log "  Validation file: $val_file"
-    log "  Output directory: $model_dir"
+    log_info "Training configuration:"
+    log_info "  Target: $target"
+    log_info "  Feature type: $feature_type"
+    log_info "  Models: ${MODELS[*]}"
+    log_info "  N-estimators: $N_ESTIMATORS"
+    log_info "  Drop columns: $drop_cols"
+    log_info "  Training file: $train_file"
+    log_info "  Validation file: $val_file"
+    log_info "  Output directory: $model_dir"
 
     # Prepare command arguments
     local cmd_args=(
@@ -268,19 +251,19 @@ run_base_training() {
     fi
 
     # Run model training
-    log "Starting model training for $feature_type - $time_scale..."
-    python3 -u Base_model/model_trainer.py "${cmd_args[@]}"
+    log_info "Starting model training for $feature_type - $time_scale..."
+    python3 -u Base_model/model_trainer.py train "${cmd_args[@]}"
 
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
-        log "ERROR: Model training failed with exit code $exit_code"
+        log_error " Model training failed with exit code $exit_code"
         return $exit_code
     fi
 
     # Validate that models were created
     validate_models "$model_dir" "$feature_type" || return 1
 
-    log " Base model training completed for $feature_type - $time_scale!"
+    log_success "Base model training completed for $feature_type - $time_scale!"
     return 0
 }
 
@@ -294,13 +277,13 @@ run_base_testing() {
     local dataset_suffix="$6"  # dataset identifier (test, gutenberg, etc.)
 
     local model_dir="Saved_models/$feature_type/$time_scale"
-    local result_dir="Saved_models_results/$feature_type/$time_scale"
+    local result_dir="Results/saved_models_results/$feature_type/$time_scale"
     local drop_cols="${FEATURE_CONFIGS[$feature_type]}"
 
-    log "--------------------------------------------"
-    log "Base Model Testing: $test_description"
-    log "Feature Type: $feature_type - $time_scale"
-    log "--------------------------------------------"
+    log_info "--------------------------------------------"
+    log_info "Base Model Testing: $test_description"
+    log_info "Feature Type: $feature_type - $time_scale"
+    log_info "--------------------------------------------"
 
     # Find latest test file
     local latest_test_file
@@ -318,13 +301,13 @@ run_base_testing() {
         model_paths+=("$model_dir/${model}_model.pkl")
     done
 
-    log "Testing configuration:"
-    log "  Target: $target"
-    log "  Feature type: $feature_type"
-    log "  Test file: $latest_test_file"
-    log "  Models: ${model_paths[*]}"
-    log "  Drop columns: $drop_cols"
-    log "  Output directory: $result_dir"
+    log_info "Testing configuration:"
+    log_info "  Target: $target"
+    log_info "  Feature type: $feature_type"
+    log_info "  Test file: $latest_test_file"
+    log_info "  Models: ${model_paths[*]}"
+    log_info "  Drop columns: $drop_cols"
+    log_info "  Output directory: $result_dir"
 
     # Prepare command arguments
     local cmd_args=(
@@ -346,16 +329,16 @@ run_base_testing() {
     fi
 
     # Run model testing
-    log "Starting model testing for $test_description - $feature_type - $time_scale..."
-    python3 -u Base_model/model_tester.py "${cmd_args[@]}"
+    log_info "Starting model testing for $test_description - $feature_type - $time_scale..."
+    python3 -u Base_model/model_tester.py test "${cmd_args[@]}"
 
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
-        log "ERROR: Model testing for $test_description failed with exit code $exit_code"
+        log_error " Model testing for $test_description failed with exit code $exit_code"
         return $exit_code
     fi
 
-    log " Base model testing completed for $test_description - $feature_type - $time_scale!"
+    log_success "Base model testing completed for $test_description - $feature_type - $time_scale!"
     return 0
 }
 
@@ -370,15 +353,15 @@ run_binary_testing() {
     local drop_cols="${FEATURE_CONFIGS[$feature_type]}"
 
     progress_update
-    log "============================================"
-    log "PHASE $CURRENT_PHASE: Binary Model Testing"
-    log "Feature Type: $feature_type"
-    log "Time Scale: $time_scale"
-    log "Target: $target"
-    log "============================================"
+    log_info "============================================"
+    log_info "PHASE $CURRENT_PHASE: Binary Model Testing"
+    log_info "Feature Type: $feature_type"
+    log_info "Time Scale: $time_scale"
+    log_info "Target: $target"
+    log_info "============================================"
 
     # Find latest timestamped feature files
-    log "Finding latest feature files..."
+    log_info "Finding latest feature files..."
     local valid_file
     local test_file
     local gutenberg_file
@@ -388,13 +371,13 @@ run_binary_testing() {
     gutenberg_file=$(find_latest_file "gutenberg_features_cleaned_*.csv") || return 1
 
     # Validate all input files exist
-    log "Validating input files..."
+    log_info "Validating input files..."
     validate_file "$valid_file" "Validation features" || return 1
     validate_file "$test_file" "Test features" || return 1
     validate_file "$gutenberg_file" "Gutenberg features" || return 1
 
     # Validate model files exist
-    log "Validating model files..."
+    log_info "Validating model files..."
     validate_file "${model_source_dir}/random_forest_model.pkl" "Random Forest model" || return 1
     validate_file "${model_source_dir}/xgboost_model.pkl" "XGBoost model" || return 1
     validate_file "${model_source_dir}/catboost_model.pkl" "CatBoost model" || return 1
@@ -408,19 +391,19 @@ run_binary_testing() {
     for dataset in "${datasets[@]}"; do
         IFS=':' read -r dataset_file dataset_description output_suffix <<< "$dataset"
 
-        log "--------------------------------------------"
-        log "Running Binary Model Testing for $dataset_description"
-        log "Feature Type: $feature_type - $time_scale"
-        log "--------------------------------------------"
+        log_info "--------------------------------------------"
+        log_info "Running Binary Model Testing for $dataset_description"
+        log_info "Feature Type: $feature_type - $time_scale"
+        log_info "--------------------------------------------"
 
         # Set top_k based on target type
         local top_k
         if [[ "$target" == "century" ]]; then
             top_k="$TOP_K_CENTURIES"
-            log "Using top-$top_k approach for century classification"
+            log_info "Using top-$top_k approach for century classification"
         else
             top_k="$TOP_K_DECADES"
-            log "Using top-$top_k approach for decade classification"
+            log_info "Using top-$top_k approach for decade classification"
         fi
 
         python Binary_model/binary_model_tester.py \
@@ -434,14 +417,14 @@ run_binary_testing() {
 
         local exit_code=$?
         if [[ $exit_code -ne 0 ]]; then
-            log "ERROR: Binary model testing for $dataset_description failed with exit code $exit_code"
+            log_error " Binary model testing for $dataset_description failed with exit code $exit_code"
             return $exit_code
         fi
 
-        log " $dataset_description binary testing completed successfully"
+        log_success "$dataset_description binary testing completed"
     done
 
-    log " Binary model testing completed for $feature_type - $time_scale!"
+    log_success "Binary model testing completed for $feature_type - $time_scale!"
     return 0
 }
 
@@ -451,39 +434,39 @@ run_feature_workflow() {
     local time_scale="$2"
     local target="$3"
 
-    log ""
-    log "######################################################################"
-    log "STARTING WORKFLOW: $feature_type - $time_scale ($target)"
-    log "######################################################################"
+    log_info ""
+    log_info "######################################################################"
+    log_info "STARTING WORKFLOW: $feature_type - $time_scale ($target)"
+    log_info "######################################################################"
 
     # Phase 1: Base Model Training
     if ! run_base_training "$feature_type" "$time_scale" "$target"; then
-        log "ERROR: Base model training failed for $feature_type - $time_scale, aborting workflow"
+        log_error " Base model training failed for $feature_type - $time_scale, aborting workflow"
         return 1
     fi
 
     # Phase 2: Base Model Testing (Test Dataset)
     if ! run_base_testing "$feature_type" "$time_scale" "$target" "test_features_cleaned_*.csv" "Test Dataset Evaluation" "test"; then
-        log "ERROR: Base model test evaluation failed for $feature_type - $time_scale, aborting workflow"
+        log_error " Base model test evaluation failed for $feature_type - $time_scale, aborting workflow"
         return 1
     fi
 
     # Phase 3: Base Model Testing (Gutenberg Dataset)
     if ! run_base_testing "$feature_type" "$time_scale" "$target" "gutenberg_features_cleaned_*.csv" "Gutenberg Dataset Evaluation" "gutenberg"; then
-        log "ERROR: Base model Gutenberg evaluation failed for $feature_type - $time_scale, aborting workflow"
+        log_error " Base model Gutenberg evaluation failed for $feature_type - $time_scale, aborting workflow"
         return 1
     fi
 
     # Phase 4: Binary Model Testing (All datasets)
     if ! run_binary_testing "$feature_type" "$time_scale" "$target"; then
-        log "ERROR: Binary model testing failed for $feature_type - $time_scale, aborting workflow"
+        log_error " Binary model testing failed for $feature_type - $time_scale, aborting workflow"
         return 1
     fi
 
-    log "######################################################################"
-    log "COMPLETED WORKFLOW: $feature_type - $time_scale ($target)"
-    log "######################################################################"
-    log ""
+    log_info "######################################################################"
+    log_info "COMPLETED WORKFLOW: $feature_type - $time_scale ($target)"
+    log_info "######################################################################"
+    log_info ""
 
     return 0
 }
@@ -495,36 +478,40 @@ cleanup() {
     local minutes=$(((total_duration % 3600) / 60))
     local seconds=$((total_duration % 60))
 
-    log "======================================================================="
-    log "JOB COMPLETION SUMMARY"
-    log "======================================================================="
-    log "Job completed at $(date)"
-    log "Final memory usage: $(free -h 2>/dev/null | grep '^Mem:' | awk '{print $3"/"$2}' || echo 'N/A')"
-    log "Total job duration: ${hours}h ${minutes}m ${seconds}s"
-    log "Phases completed: $CURRENT_PHASE/$TOTAL_PHASES"
-    log "======================================================================="
+    log_info "======================================================================="
+    log_info "JOB COMPLETION SUMMARY"
+    log_info "======================================================================="
+    log_info "Job completed at $(date)"
+    log_info "Final memory show_help: $(free -h 2>/dev/null | grep '^Mem:' | awk '{print $3"/"$2}' || echo 'N/A')"
+    log_info "Total job duration: ${hours}h ${minutes}m ${seconds}s"
+    log_info "Phases completed: $CURRENT_PHASE/$TOTAL_PHASES"
+    log_info "======================================================================="
 }
 
 # ==================== ARGUMENT PARSING ====================
 
-usage() {
-    echo "Usage: sbatch [SLURM_OPTIONS] $0 [SCRIPT_OPTIONS]"
-    echo "Script Options:"
-    echo "  -f, --features FEATURES    Comma-separated list of feature types to run"
-    echo "                            Available: compression,lexical_structure,readability,distance,neologism,final_model,optimal"
-    echo "                            Default: all"
-    echo "  -h, --help                Show this help message"
-    echo ""
-    echo "Examples:"
-    echo "  sbatch $0                                        # Run all feature types"
-    echo "  sbatch $0 -f compression                         # Run only compression features"
-    echo "  sbatch $0 -f compression,readability             # Run compression and readability"
-    echo "  sbatch $0 -f final_model                         # Run only the final combined model"
-    echo "  sbatch $0 -f optimal                             # Run only the optimal 16-feature model"
-    echo ""
-    echo "SLURM Examples:"
-    echo "  sbatch --job-name=compression $0 -f compression  # Custom job name"
-    echo "  sbatch --mem=100GB $0 -f final_model             # Custom memory allocation"
+show_help() {
+    cat << EOF
+Usage: sbatch [SLURM_OPTIONS] $0 [SCRIPT_OPTIONS]
+
+Script Options:
+  -f, --features FEATURES    Comma-separated list of feature types to run
+                             Available: compression,lexical_structure,readability,distance,neologism,final_model,optimal
+                             Default: all
+  -h, --help                 Show this help message
+
+Examples:
+  sbatch $0                                         # Run all feature types
+  sbatch $0 -f compression                          # Run only compression features
+  sbatch $0 -f compression,readability              # Run compression and readability
+  sbatch $0 -f final_model                          # Run only the final combined model
+  sbatch $0 -f optimal                              # Run only the optimal 16-feature model
+
+SLURM Examples:
+  sbatch --job-name=compression $0 -f compression   # Custom job name
+  sbatch --mem=100GB $0 -f final_model              # Custom memory allocation
+
+EOF
 }
 
 parse_arguments() {
@@ -537,12 +524,12 @@ parse_arguments() {
                 shift 2
                 ;;
             -h|--help)
-                usage
+                show_help
                 exit 0
                 ;;
             *)
                 echo "Unknown option: $1"
-                usage
+                show_help
                 exit 1
                 ;;
         esac
@@ -558,10 +545,10 @@ main() {
     # Parse command line arguments
     parse_arguments "$@"
 
-    log "Starting Feature Model Pipeline"
-    log "Selected features: $SELECTED_FEATURES"
-    log "SLURM Job ID: ${SLURM_JOB_ID:-N/A}"
-    log "======================================================================="
+    log_info "Starting Feature Model Pipeline"
+    log_info "Selected features: $SELECTED_FEATURES"
+    log_info "SLURM Job ID: ${SLURM_JOB_ID:-N/A}"
+    log_info "======================================================================="
 
     # Create necessary directories
     ensure_directory "$LOG_DIR" "Log" || exit 1
@@ -573,11 +560,11 @@ main() {
 
     # Validate feature extraction directory
     if [[ ! -d "$FEATURE_DIR" ]]; then
-        log "ERROR: Feature extraction directory not found: $FEATURE_DIR"
+        log_error " Feature extraction directory not found: $FEATURE_DIR"
         exit 1
     fi
 
-    log "Validated feature extraction directory: $FEATURE_DIR"
+    log_info "Validated feature extraction directory: $FEATURE_DIR"
 
     # Define all possible workflows
     local all_workflows=(
@@ -620,15 +607,15 @@ main() {
 
     # Validate that we have workflows to run
     if [[ ${#workflows[@]} -eq 0 ]]; then
-        log "ERROR: No valid feature types selected or found"
-        log "Available feature types: compression, lexical_structure, readability, distance, neologism, final_model, optimal"
+        log_error " No valid feature types selected or found"
+        log_info "Available feature types: compression, lexical_structure, readability, distance, neologism, final_model, optimal"
         exit 1
     fi
 
-    log "Execution order planned (${#workflows[@]} workflows):"
+    log_info "Execution order planned (${#workflows[@]} workflows):"
     for i in "${!workflows[@]}"; do
         IFS=':' read -r feature_type time_scale target <<< "${workflows[$i]}"
-        log "  $((i+1)). $feature_type - $time_scale ($target)"
+        log_info "  $((i+1)). $feature_type - $time_scale ($target)"
     done
 
     # Execute all workflows sequentially
@@ -636,26 +623,26 @@ main() {
         IFS=':' read -r feature_type time_scale target <<< "$workflow"
 
         if ! run_feature_workflow "$feature_type" "$time_scale" "$target"; then
-            log "ERROR: Workflow failed for $feature_type - $time_scale, aborting entire pipeline"
+            log_error " Workflow failed for $feature_type - $time_scale, aborting entire pipeline"
             exit 1
         fi
     done
 
-    log "======================================================================="
-    log "SELECTED FEATURE PIPELINES COMPLETED SUCCESSFULLY"
-    log "======================================================================="
-    log ""
-    log "Summary of completed workflows:"
+    log_info "======================================================================="
+    log_info "SELECTED FEATURE PIPELINES COMPLETED SUCCESSFULLY"
+    log_info "======================================================================="
+    log_info ""
+    log_info "Summary of completed workflows:"
     for workflow in "${workflows[@]}"; do
         IFS=':' read -r feature_type time_scale target <<< "$workflow"
-        log "   $feature_type - $time_scale ($target)"
-        log "    - Base models: Saved_models/$feature_type/$time_scale/"
-        log "    - Base results: Saved_models_results/$feature_type/$time_scale/"
-        log "    - Binary results: Saved_models_binary/$feature_type/$time_scale/"
+        log_info "   $feature_type - $time_scale ($target)"
+        log_info "    - Base models: Saved_models/$feature_type/$time_scale/"
+        log_info "    - Base results: Results/saved_models_results/$feature_type/$time_scale/"
+        log_info "    - Binary results: Saved_models_binary/$feature_type/$time_scale/"
     done
-    log ""
-    log "Check $LOG_DIR for detailed execution logs"
-    log "======================================================================="
+    log_info ""
+    log_info "Check $LOG_DIR for detailed execution logs"
+    log_info "======================================================================="
 }
 
 # Run main function

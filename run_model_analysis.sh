@@ -32,7 +32,7 @@ mkdir -p logs
 
 # Default values
 BASE_DIR="$(pwd)"
-OUTPUT_DIR="model_analysis_results"
+OUTPUT_DIR="Results/model_analysis"
 MODE="all"
 PLOT_TYPES=""
 METRICS=""
@@ -48,11 +48,15 @@ PLOTTER_SCRIPT="Plotting/model_comparison_plotter.py"
 # ==================== UTILITY FUNCTIONS ====================
 
 log_info() {
-    echo "[$(date '+%H:%M:%S')] INFO: $*"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $*"
 }
 
 log_error() {
-    echo "[$(date '+%H:%M:%S')] ERROR: $*" >&2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" >&2
+}
+
+log_success() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $*"
 }
 
 # Basic validation
@@ -109,7 +113,7 @@ run_plotting() {
         exit 1
     }
 
-    log_info "Plotting completed successfully"
+    log_success "Plotting completed"
 }
 
 # Main execution function
@@ -144,7 +148,7 @@ Usage: $0 [OPTIONS]
 
 OPTIONS:
   --mode MODE             Analysis mode (full|custom|all) [default: all]
-  --output-dir DIR        Output directory [default: model_analysis_results]
+  --output-dir DIR        Output directory [default: Results/model_analysis]
   --plot_types TYPES      Plot types (space-separated): heatmap binary_comparison dataset_comparison time_comparison all
   --metrics METRICS       Metrics (space-separated): accuracy f1_macro auc_roc precision recall (default: all available)
   --feature_types TYPES   Feature types (space-separated): compression lexical_structure readability distance neologism final_model
@@ -232,4 +236,4 @@ mkdir -p "$OUTPUT_DIR"
 validate_environment
 run_analysis
 
-log_info "Analysis completed successfully - Results in: $OUTPUT_DIR"
+log_success "Analysis completed - Results in: $OUTPUT_DIR"

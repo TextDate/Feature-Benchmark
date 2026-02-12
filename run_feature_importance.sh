@@ -1,5 +1,4 @@
 #!/bin/bash
-
 #SBATCH --job-name=feature_importance
 #SBATCH --output=logs/feature_importance_%j.out
 #SBATCH --error=logs/feature_importance_%j.err
@@ -7,20 +6,32 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=200GB
-#SBATCH --partition=cpu
+#SBATCH --partition=gpu
 
+# Feature Importance Analysis Script for TextDate Feature-Benchmark
+#
+# Usage Examples:
+#   sbatch run_feature_importance.sh
+#   sbatch run_feature_importance.sh --comparative
+#   sbatch run_feature_importance.sh --models catboost,xgboost
 
-# Feature importance analysis script
+set -e  # Exit on any error
 
-# Load required modules
-
-# Activate virtual environment
+# ==================== ENVIRONMENT SETUP ====================
 source ../../virtual-venv/bin/activate
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+export OPENBLAS_NUM_THREADS=2
+export OMP_NUM_THREADS=2
+
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
+# ==================== CONFIGURATION ====================
 
 # Default parameters
 MODEL_DIR="Saved_models"
 TEST_DATA_DIR="Extracted_features"
-OUTPUT_DIR="feature_importance_results"
+OUTPUT_DIR="Results/feature_importance"
 TARGET_COL="century"
 DROP_COLS="text,file_name,id"
 
@@ -33,9 +44,26 @@ RUN_PERMUTATION=true
 RUN_PCA=true
 RUN_SHAP=true
 RUN_CORRELATION=true
+RUN_COMBINED_1X3=true
+RUN_COMPARATIVE=false
+COMPARATIVE_OUTPUT_DIR="Results/comparative_2x3_plots"
+TEST_CSV=""
 
+# ==================== UTILITY FUNCTIONS ====================
 
-print_usage() {
+log_info() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] INFO: $*"
+}
+
+log_error() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $*" >&2
+}
+
+log_success() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $*"
+}
+
+show_help() {
     cat << EOF
 Usage: $0 [OPTIONS]
 
@@ -54,6 +82,10 @@ Analysis options (disable with --no-X):
     --pca                      Enable PCA analysis (default: enabled)
     --shap                     Enable SHAP analysis (default: enabled)
     --correlation              Enable correlation analysis (default: enabled)
+    --combined-1x3             Enable 1x3 combined plot (no PCA) (default: enabled)
+    --comparative              Enable comparative 2x3 plots (default: disabled)
+    --comparative-output DIR   Output directory for comparative plots (default: $COMPARATIVE_OUTPUT_DIR)
+    --test-csv FILE            Test CSV for comparative mode (auto-detected if not set)
 
     --no-tree                  Disable tree-based importance
     --no-permutation           Disable permutation importance
@@ -80,24 +112,13 @@ Examples:
     # Run only SHAP and correlation analysis on CatBoost
     $0 --no-tree --no-permutation --no-pca
 
+    # Run with comparative 2x3 plots
+    $0 --comparative
+
 EOF
 }
 
-log_info() {
-    echo "[INFO] $1"
-}
-
-log_success() {
-    echo "[SUCCESS] $1"
-}
-
-log_warning() {
-    echo "[WARNING] $1"
-}
-
-log_error() {
-    echo "[ERROR] $1"
-}
+# ==================== ARGUMENT PARSING ====================
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -166,21 +187,45 @@ while [[ $# -gt 0 ]]; do
             RUN_CORRELATION=false
             shift
             ;;
+        --combined-1x3)
+            RUN_COMBINED_1X3=true
+            shift
+            ;;
+        --comparative)
+            RUN_COMPARATIVE=true
+            shift
+            ;;
+        --comparative-output)
+            COMPARATIVE_OUTPUT_DIR="$2"
+            shift 2
+            ;;
+        --test-csv)
+            TEST_CSV="$2"
+            shift 2
+            ;;
         -h|--help)
-            print_usage
+            show_help
             exit 0
             ;;
         *)
             log_error "Unknown option: $1"
-            print_usage
+            show_help
             exit 1
             ;;
     esac
 done
 
-# Create logs directory
-mkdir -p logs
+# ==================== MAIN EXECUTION ====================
 
+echo "======================================================================="
+echo "TEXTDATE FEATURE-BENCHMARK FEATURE IMPORTANCE ANALYSIS"
+echo "======================================================================="
+echo "Job ID: ${SLURM_JOB_ID:-"N/A"}"
+echo "Node: ${SLURM_NODELIST:-"localhost"}"
+echo "Start time: $(date)"
+echo "Model Directory: $MODEL_DIR"
+echo "Output Directory: $OUTPUT_DIR"
+echo "======================================================================="
 
 # Validate directories
 if [ ! -d "$MODEL_DIR" ]; then
@@ -239,6 +284,7 @@ BASE_ANALYSIS_FLAGS=""
 [ "$RUN_PERMUTATION" = true ] && BASE_ANALYSIS_FLAGS="$BASE_ANALYSIS_FLAGS --permutation"
 [ "$RUN_PCA" = true ] && BASE_ANALYSIS_FLAGS="$BASE_ANALYSIS_FLAGS --pca"
 [ "$RUN_CORRELATION" = true ] && BASE_ANALYSIS_FLAGS="$BASE_ANALYSIS_FLAGS --correlation"
+[ "$RUN_COMBINED_1X3" = true ] && BASE_ANALYSIS_FLAGS="$BASE_ANALYSIS_FLAGS --combined_1x3"
 
 if [ -z "$BASE_ANALYSIS_FLAGS" ] && [ "$RUN_SHAP" = false ]; then
     log_error "No analysis methods selected!"
@@ -280,7 +326,7 @@ for model_file in "${MODEL_FILES[@]}"; do
         fi
 
         # Run the feature importance analyzer
-        python Plotting/feature_importance_analyzer.py \
+        python Plotting/feature_importance_analyzer.py analyze \
             --model "$model_file" \
             --test_csv "$test_file" \
             --target "$CURRENT_TARGET_COL" \
@@ -301,5 +347,34 @@ log_info "Results saved in: $OUTPUT_DIR"
 log_info "Total combinations processed: $TOTAL_COMBINATIONS"
 
 # Generate summary
-TOTAL_PLOTS=$(find "$OUTPUT_DIR" -name "*.png" | wc -l)
+TOTAL_PLOTS=$(find "$OUTPUT_DIR" -name "*.png" 2>/dev/null | wc -l)
 log_info "Total plots generated: $TOTAL_PLOTS"
+
+# Run comparative 2x3 plots if requested
+if [ "$RUN_COMPARATIVE" = true ]; then
+    log_info "Starting comparative 2x3 plot generation..."
+
+    # Auto-detect test CSV if not explicitly set
+    if [ -z "$TEST_CSV" ]; then
+        TEST_CSV=$(find "$TEST_DATA_DIR" -name "*cleaned*.csv" -type f | head -1)
+    fi
+
+    if [ -z "$TEST_CSV" ]; then
+        log_error "No test CSV found for comparative mode"
+    else
+        log_info "Comparative output: $COMPARATIVE_OUTPUT_DIR"
+        log_info "Test CSV: $TEST_CSV"
+
+        python Plotting/feature_importance_analyzer.py comparative \
+            --model_dir "$MODEL_DIR" \
+            --test_csv "$TEST_CSV" \
+            --output_dir "$COMPARATIVE_OUTPUT_DIR" \
+            --drop_cols "$DROP_COLS"
+
+        if [ $? -eq 0 ]; then
+            log_success "Comparative 2x3 plots completed!"
+        else
+            log_error "Comparative 2x3 plots failed!"
+        fi
+    fi
+fi
