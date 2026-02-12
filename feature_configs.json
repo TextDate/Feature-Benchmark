@@ -1,0 +1,66 @@
+{
+  "compression": [
+    "file_name", "year", "decade", "century", "Special_Character_Ratio",
+    "Avg_Word_Length", "Lexical_Richness", "Avg_Sentence_Length", "Punctuation_Density",
+    "Syllable_Per_Word", "Digit_Ratio", "Flesch_Readability", "Stopword_Ratio",
+    "at", "and", "by", "the", "for", "a", "of", "with", "to", "as", "on", "in", "an", "that", "it", "is", "was",
+    "contains_early_modern_words", "contains_industrial_words", "contains_late_industrial_words",
+    "contains_early_20th_words", "contains_post_war_words", "contains_late_modern_words",
+    "contains_digital_dawn_words", "contains_digital_native_words", "contains_modern_vocabulary",
+    "contains_historical_vocabulary", "vocabulary_modernity_score"
+  ],
+  "lexical_structure": [
+    "file_name", "year", "decade", "century", "Special_Character_Ratio",
+    "Compression_Ratio_Order_1", "NRC_Order_1", "Entropy_Ratio_Order_1", "Shannon_Entropy",
+    "Compression_Ratio_Order_2", "NRC_Order_2", "Entropy_Ratio_Order_2",
+    "Flesch_Readability", "Stopword_Ratio",
+    "at", "and", "by", "the", "for", "a", "of", "with", "to", "as", "on", "in", "an", "that", "it", "is", "was",
+    "contains_early_modern_words", "contains_industrial_words", "contains_late_industrial_words",
+    "contains_early_20th_words", "contains_post_war_words", "contains_late_modern_words",
+    "contains_digital_dawn_words", "contains_digital_native_words", "contains_modern_vocabulary",
+    "contains_historical_vocabulary", "vocabulary_modernity_score"
+  ],
+  "readability": [
+    "file_name", "year", "decade", "century", "Special_Character_Ratio",
+    "Compression_Ratio_Order_1", "NRC_Order_1", "Entropy_Ratio_Order_1", "Shannon_Entropy",
+    "Compression_Ratio_Order_2", "NRC_Order_2", "Entropy_Ratio_Order_2",
+    "Avg_Word_Length", "Lexical_Richness", "Avg_Sentence_Length", "Punctuation_Density",
+    "Syllable_Per_Word", "Digit_Ratio",
+    "at", "and", "by", "the", "for", "a", "of", "with", "to", "as", "on", "in", "an", "that", "it", "is", "was",
+    "contains_early_modern_words", "contains_industrial_words", "contains_late_industrial_words",
+    "contains_early_20th_words", "contains_post_war_words", "contains_late_modern_words",
+    "contains_digital_dawn_words", "contains_digital_native_words", "contains_modern_vocabulary",
+    "contains_historical_vocabulary", "vocabulary_modernity_score"
+  ],
+  "distance": [
+    "file_name", "year", "decade", "century", "Special_Character_Ratio",
+    "Compression_Ratio_Order_1", "NRC_Order_1", "Entropy_Ratio_Order_1", "Shannon_Entropy",
+    "Compression_Ratio_Order_2", "NRC_Order_2", "Entropy_Ratio_Order_2",
+    "Avg_Word_Length", "Lexical_Richness", "Avg_Sentence_Length", "Punctuation_Density",
+    "Syllable_Per_Word", "Digit_Ratio", "Flesch_Readability", "Stopword_Ratio",
+    "contains_early_modern_words", "contains_industrial_words", "contains_late_industrial_words",
+    "contains_early_20th_words", "contains_post_war_words", "contains_late_modern_words",
+    "contains_digital_dawn_words", "contains_digital_native_words", "contains_modern_vocabulary",
+    "contains_historical_vocabulary", "vocabulary_modernity_score"
+  ],
+  "neologism": [
+    "file_name", "year", "decade", "century", "Special_Character_Ratio",
+    "Compression_Ratio_Order_1", "NRC_Order_1", "Entropy_Ratio_Order_1", "Shannon_Entropy",
+    "Compression_Ratio_Order_2", "NRC_Order_2", "Entropy_Ratio_Order_2",
+    "Avg_Word_Length", "Lexical_Richness", "Avg_Sentence_Length", "Punctuation_Density",
+    "Syllable_Per_Word", "Digit_Ratio", "Flesch_Readability", "Stopword_Ratio",
+    "at", "and", "by", "the", "for", "a", "of", "with", "to", "as", "on", "in", "an", "that", "it", "is", "was"
+  ],
+  "final_model": [
+    "file_name", "year", "decade", "century", "Special_Character_Ratio"
+  ],
+  "optimal": [
+    "file_name", "year", "decade", "century", "Compression_Ratio_Order_1", "NRC_Order_1",
+    "Entropy_Ratio_Order_1", "Shannon_Entropy", "Avg_Word_Length", "Compression_Ratio_Order_2",
+    "Entropy_Ratio_Order_2", "Flesch_Readability", "Stopword_Ratio", "of", "the", "a", "and",
+    "in", "with", "to", "is", "at", "an", "that", "for", "was", "it", "as",
+    "contains_early_modern_words", "contains_industrial_words", "contains_early_20th_words",
+    "contains_post_war_words", "contains_late_modern_words", "contains_digital_dawn_words",
+    "contains_digital_native_words", "contains_modern_vocabulary", "vocabulary_modernity_score"
+  ]
+}

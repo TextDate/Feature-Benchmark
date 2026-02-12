@@ -171,7 +171,7 @@ class TextFeatureExtractor:
 
             print(f"[INFO] Starting ProcessPoolExecutor with {self.num_threads} workers for batch {i+1}", flush=True)
 
-            # Enhanced ProcessPoolExecutor with comprehensive monitoring
+            # ProcessPoolExecutor with monitoring
             executor_start_time = time.time()
 
             with ProcessPoolExecutor(
@@ -1022,7 +1022,7 @@ def check_system_limits():
         return False
 
 def setup_worker_error_handling():
-    """Set up comprehensive error handling for worker processes."""
+    """Set up error handling for worker processes."""
     def signal_handler(signum, frame):
         print(f"[WORKER-ERROR] Worker process received signal {signum}: {signal.Signals(signum).name}", flush=True)
         print(f"[WORKER-ERROR] Worker PID: {os.getpid()}, Frame: {frame.f_code.co_filename}:{frame.f_lineno}", flush=True)
@@ -1108,7 +1108,7 @@ def clear_worker_timeout():
 def initialize_worker_with_models(file_info_path, language, lowercase, target_words, serialized_models, serialized_reference_data, use_ncd=True):
     """
     Initialize worker process with pre-built serialized models to avoid expensive rebuilding.
-    Enhanced with comprehensive error handling and debugging.
+    Includes error handling and debugging.
     """
     global _global_extractor, _global_target_words, _global_reference_models, _global_reference_data
 

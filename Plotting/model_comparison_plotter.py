@@ -68,12 +68,12 @@ class ModelResultsAnalyzer:
         Initialize the analyzer with base directory containing results.
 
         Args:
-            base_dir: Base directory containing Saved_models_results and Saved_models_binary
-            output_dir: Directory to save plots (default: base_dir/comparison_plots)
+            base_dir: Base directory containing Results/saved_models_results and Saved_models_binary
+            output_dir: Directory to save plots (default: base_dir/Results/comparison_plots)
         """
         
         self.base_dir = Path(base_dir)
-        self.output_dir = Path(output_dir) if output_dir else self.base_dir / "comparison_plots"
+        self.output_dir = Path(output_dir) if output_dir else self.base_dir / "Results" / "comparison_plots"
         self.output_dir.mkdir(exist_ok=True)
 
         # Define constants first
@@ -134,7 +134,7 @@ class ModelResultsAnalyzer:
         logger.info("Loading base model results...")
         results = {}
 
-        base_path = self.base_dir / "Saved_models_results"
+        base_path = self.base_dir / "Results" / "saved_models_results"
         if not base_path.exists():
             logger.warning(f"Base results directory not found: {base_path}")
             return results
@@ -256,6 +256,207 @@ class ModelResultsAnalyzer:
         filename = f"base_model_heatmap_{metric}_{time_scale}.png"
         plt.savefig(self.heatmaps_dir / dataset / filename, dpi=300, bbox_inches='tight')
         logger.info(f"Saved heatmap: heatmaps/{dataset}/{filename}")
+
+        return fig
+
+    def create_2x2_ranking_heatmaps(self, dataset: str = 'test', figsize: Tuple[int, int] = (20, 16)) -> plt.Figure:
+        """Create 2x2 grid of AUC-ROC and AUPRC heatmaps with centuries on top row, decades on bottom row."""
+        logger.info(f"Creating 2x2 ranking heatmaps for dataset: {dataset}")
+
+        # Create figure with 2x2 subplots
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+        # Define custom color palette: purple (0.0) → blue → green → yellow → orange → red (1.0)
+        cmap = 'RdYlBu_r'
+
+        # Define metrics and time scales
+        metrics = ['auc_roc', 'auprc']
+        time_scales = ['centuries', 'decades']
+
+        # Fix acronym formatting to match dissertation
+        metric_labels = {'auc_roc': 'AUC-ROC', 'auprc': 'AUPRC'}
+
+        for row, time_scale in enumerate(time_scales):
+            for col, metric in enumerate(metrics):
+                ax = axes[row, col]
+
+                # Prepare data matrix
+                data_matrix = []
+                feature_labels = []
+                model_labels = self.BASE_MODELS
+
+                for feature_type in self.FEATURE_TYPES:
+                    if (feature_type in self.base_results and
+                        time_scale in self.base_results[feature_type] and
+                        dataset in self.base_results[feature_type][time_scale]):
+                        row_data = []
+                        for model in self.BASE_MODELS:
+                            if model in self.base_results[feature_type][time_scale][dataset]:
+                                value = self.base_results[feature_type][time_scale][dataset][model].get(metric, np.nan)
+                                row_data.append(value)
+                            else:
+                                row_data.append(np.nan)
+                        data_matrix.append(row_data)
+                        feature_labels.append(feature_type.replace('_', ' ').title())
+                        
+
+                if data_matrix:
+                    # Create heatmap with 2 decimal places
+                    data_df = pd.DataFrame(data_matrix, index=feature_labels, columns=model_labels)
+                    sns.heatmap(data_df, annot=True, fmt='.2f', cmap=cmap,
+                               square=True, cbar_kws={'label': metric_labels[metric]}, ax=ax,
+                               vmin=0, vmax=1)  # Set consistent scale for ranking metrics
+
+                    # Customize subplot
+                    ax.set_title(f'{metric_labels[metric]} - {time_scale.title()}',
+                                fontsize=14, fontweight='bold', pad=10)
+                    ax.set_xlabel('Models', fontsize=12, fontweight='bold')
+                    ax.set_ylabel('Feature Types' if col == 0 else '', fontsize=12, fontweight='bold')
+
+                    # Rotate labels for better readability
+                    ax.tick_params(axis='x', rotation=45, labelsize=10)
+                    ax.tick_params(axis='y', rotation=0, labelsize=10)
+
+        plt.suptitle(f'Model Performance Comparison - Ranking Metrics\nDataset: {dataset.title()}',
+                     fontsize=16, fontweight='bold', y=0.98)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.93)
+
+        # Save plot
+        filename = f"ranking_metrics_2x2_{dataset}.png"
+        plt.savefig(self.heatmaps_dir / dataset / filename, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved 2x2 ranking metrics plot: heatmaps/{dataset}/{filename}")
+
+        return fig
+
+    def create_2x2_error_heatmaps(self, dataset: str = 'test', figsize: Tuple[int, int] = (20, 16)) -> plt.Figure:
+        """Create 2x2 grid of MAE and RMSE heatmaps with centuries on top row, decades on bottom row."""
+        logger.info(f"Creating 2x2 error heatmaps for dataset: {dataset}")
+
+        # Create figure with 2x2 subplots
+        fig, axes = plt.subplots(2, 2, figsize=figsize)
+
+        cmap = 'RdYlBu_r'
+
+        # Define metrics and time scales
+        metrics = ['mae', 'rmse']
+        time_scales = ['centuries', 'decades']
+
+        # Metric labels
+        metric_labels = {'mae': 'MAE', 'rmse': 'RMSE'}
+
+        for row, time_scale in enumerate(time_scales):
+            for col, metric in enumerate(metrics):
+                ax = axes[row, col]
+
+                # Prepare data matrix
+                data_matrix = []
+                feature_labels = []
+                model_labels = self.BASE_MODELS
+
+                for feature_type in self.FEATURE_TYPES:
+                    if (feature_type in self.base_results and
+                        time_scale in self.base_results[feature_type] and
+                        dataset in self.base_results[feature_type][time_scale]):
+                        row_data = []
+                        for model in self.BASE_MODELS:
+                            if model in self.base_results[feature_type][time_scale][dataset]:
+                                value = self.base_results[feature_type][time_scale][dataset][model].get(metric, np.nan)
+                                row_data.append(value)
+                            else:
+                                row_data.append(np.nan)
+                        data_matrix.append(row_data)
+                        feature_labels.append(feature_type.replace('_', ' ').title())
+
+                if data_matrix:
+                    print(f"Data matrix for {metric} - {time_scale}:", flush=True)
+                    print(data_matrix, flush=True)
+                    # Create heatmap with 2 decimal places
+                    data_df = pd.DataFrame(data_matrix, index=feature_labels, columns=model_labels)
+                    sns.heatmap(data_df, annot=True, fmt='.2f', cmap=cmap,
+                               square=True, cbar_kws={'label': metric_labels[metric]}, ax=ax)
+
+                    # Customize subplot
+                    ax.set_title(f'{metric_labels[metric]} - {time_scale.title()}',
+                                fontsize=14, fontweight='bold', pad=10)
+                    ax.set_xlabel('Models', fontsize=12, fontweight='bold')
+                    ax.set_ylabel('Feature Types' if col == 0 else '', fontsize=12, fontweight='bold')
+
+                    # Rotate labels for better readability
+                    ax.tick_params(axis='x', rotation=45, labelsize=10)
+                    ax.tick_params(axis='y', rotation=0, labelsize=10)
+
+        plt.suptitle(f'Model Performance Comparison - Error Metrics\nDataset: {dataset.title()}',
+                     fontsize=16, fontweight='bold', y=0.98)
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.93)
+
+        # Save plot
+        filename = f"error_metrics_2x2_{dataset}.png"
+        plt.savefig(self.heatmaps_dir / dataset / filename, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved 2x2 error metrics plot: heatmaps/{dataset}/{filename}")
+
+        return fig
+
+    def create_topk_combined_plot(self, time_scale: str = 'decades', dataset: str = 'test',
+                                  figsize: Tuple[int, int] = (20, 6)) -> plt.Figure:
+        """Create combined top-k accuracy plot in 3-line format (top 3, 5, 10)."""
+        logger.info(f"Creating combined top-k plot for {time_scale} on {dataset}")
+
+        # Create figure with 1x3 subplots
+        fig, axes = plt.subplots(1, 3, figsize=figsize)
+
+        # Define top-k values and custom shared color palette
+        topk_values = [3, 5, 10]
+        shared_palette = 'RdYlBu_r'
+
+        for idx, k in enumerate(topk_values):
+            ax = axes[idx]
+            metric = f'top{k}_accuracy'
+
+            # Prepare data matrix
+            data_matrix = []
+            feature_labels = []
+            model_labels = self.BASE_MODELS
+
+            for feature_type in self.FEATURE_TYPES:
+                if (feature_type in self.base_results and
+                    time_scale in self.base_results[feature_type] and
+                    dataset in self.base_results[feature_type][time_scale]):
+                    row_data = []
+                    for model in self.BASE_MODELS:
+                        if model in self.base_results[feature_type][time_scale][dataset]:
+                            value = self.base_results[feature_type][time_scale][dataset][model].get(metric, np.nan)
+                            row_data.append(value)
+                        else:
+                            row_data.append(np.nan)
+                    data_matrix.append(row_data)
+                    feature_labels.append(feature_type.replace('_', ' ').title())
+
+            if data_matrix:
+                # Create heatmap
+                data_df = pd.DataFrame(data_matrix, index=feature_labels, columns=model_labels)
+                sns.heatmap(data_df, annot=True, fmt='.2f', cmap=shared_palette,
+                           square=True, cbar_kws={'label': f'Top-{k} Accuracy'}, ax=ax,
+                           vmin=0, vmax=1)
+
+                # Customize subplot
+                ax.set_title(f'Top-{k} Accuracy', fontsize=14, fontweight='bold', pad=10)
+                ax.set_xlabel('Models', fontsize=12, fontweight='bold')
+                ax.set_ylabel('Feature Types' if idx == 0 else '', fontsize=12, fontweight='bold')
+
+                # Rotate labels
+                ax.tick_params(axis='x', rotation=45, labelsize=10)
+                ax.tick_params(axis='y', rotation=0, labelsize=10)
+
+        plt.suptitle(f'Top-K Accuracy Analysis - {time_scale.title()} Classification\nDataset: {dataset.title()}',
+                     fontsize=16, fontweight='bold', y=1.02)
+        plt.tight_layout()
+
+        # Save plot
+        filename = f"topk_combined_{time_scale}_{dataset}.png"
+        plt.savefig(self.heatmaps_dir / dataset / filename, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved combined top-k plot: heatmaps/{dataset}/{filename}")
 
         return fig
 
@@ -704,12 +905,119 @@ class ModelResultsAnalyzer:
 
         return fig
 
+    def create_enhanced_binary_threshold_plots(self, feature_type: str = 'final_model',
+                                             time_scale: str = 'decades', model: str = 'catboost',
+                                             figsize: Tuple[int, int] = (24, 8)) -> plt.Figure:
+        """
+        Create enhanced binary threshold plots with bigger labels for readability.
+        """
+        logger.info(f"Creating enhanced binary threshold plot for {model} {feature_type} ({time_scale})")
+
+        if (feature_type not in self.binary_results or
+            time_scale not in self.binary_results[feature_type]):
+            logger.warning(f"No binary results found for {feature_type} {time_scale}")
+            return None
+
+        # Create wider subplot grid with larger fonts
+        fig, axes = plt.subplots(1, 3, figsize=figsize)
+        plt.subplots_adjust(hspace=0.3, wspace=0.25, top=0.90, bottom=0.15, left=0.08, right=0.94)
+
+        # Define metrics with bigger labels
+        metrics = ['accuracy', 'f1_macro']
+        colors = {'accuracy': '#1f77b4', 'f1_macro': '#ff7f0e'}
+        datasets = self.DATASETS
+
+        for dataset_idx, dataset in enumerate(datasets):
+            ax = axes[dataset_idx]
+
+            if dataset in self.binary_results[feature_type][time_scale]:
+                df = self.binary_results[feature_type][time_scale][dataset]
+                model_data = df[df['model'].str.contains(model, na=False)]
+
+                if not model_data.empty:
+                    # Plot with enhanced styling
+                    for metric in metrics:
+                        if metric in model_data.columns:
+                            plot_thresholds = model_data['threshold'].values
+                            if time_scale == 'centuries':
+                                plot_thresholds = plot_thresholds / 100
+
+                            metric_values = model_data[metric].values
+                            linestyle = '-' if metric == 'accuracy' else ':'
+
+                            ax.plot(plot_thresholds, metric_values,
+                                   label=metric.replace('_', ' ').title(),
+                                   color=colors[metric], linewidth=4, alpha=0.9,
+                                   linestyle=linestyle, zorder=2)
+
+                    # Add random baseline
+                    random_data = df[df['model'] == 'random']
+                    if not random_data.empty and 'accuracy' in random_data.columns:
+                        random_thresholds = random_data['threshold'].values
+                        if time_scale == 'centuries':
+                            random_thresholds = random_thresholds / 100
+                        random_accuracy = random_data['accuracy'].values
+
+                        ax.plot(random_thresholds, random_accuracy, '-', color='red',
+                               alpha=0.7, label='Random', linewidth=4, zorder=2)
+
+                    # Add percentage of texts with bigger styling
+                    if '%_of_texts' in model_data.columns:
+                        plot_thresholds = model_data['threshold'].values
+                        if time_scale == 'centuries':
+                            plot_thresholds = plot_thresholds / 100
+                        pct_texts = model_data['%_of_texts'].values
+
+                        ax2 = ax.twinx()
+                        ax2.plot(plot_thresholds, pct_texts, '--', color='green', alpha=0.8,
+                               label='% of Texts', linewidth=4, zorder=2)
+                        ax2.set_ylabel('% of Texts', fontsize=16, fontweight='bold')  # Bigger font
+                        ax2.set_ylim(0, 1)
+                        ax2.tick_params(axis='y', labelsize=14)  # Bigger ticks
+
+            # Enhanced styling with bigger fonts
+            ax.set_title(f'{dataset.title()} Dataset', fontsize=20, fontweight='bold', pad=25)  # Bigger title
+            ax.set_xlabel('Temporal Threshold', fontsize=18, fontweight='bold')  # Bigger labels
+            if dataset_idx == 0:
+                ax.set_ylabel('Performance Score', fontsize=18, fontweight='bold')
+
+            ax.set_ylim(0, 1.05)
+            ax.tick_params(axis='both', labelsize=14)  # Bigger tick labels
+            ax.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+
+            # Bigger legend
+            if dataset_idx == 0:
+                lines1, labels1 = ax.get_legend_handles_labels()
+                if 'ax2' in locals():
+                    lines2, labels2 = ax2.get_legend_handles_labels()
+                    all_lines = lines1 + lines2
+                    all_labels = labels1 + labels2
+                else:
+                    all_lines = lines1
+                    all_labels = labels1
+
+                legend = ax.legend(all_lines, all_labels, bbox_to_anchor=(0, 1.30),
+                                 loc='upper left', fontsize=14,  # Bigger legend font
+                                 frameon=True, fancybox=True, shadow=True, ncol=3)
+
+        # Enhanced main title
+        main_title = f'{model.upper()} Binary Classification Performance\n{feature_type.replace("_", " ").title()} Features - {time_scale.title()} Scale'
+        fig.text(0.5, 1.08, main_title, ha='center', va='bottom',
+                fontsize=24, fontweight='bold')  # Much bigger title
+
+        # Save with enhanced naming
+        filename = f"enhanced_binary_threshold_{model}_{feature_type}_{time_scale}.png"
+        save_path = self.binary_dir / time_scale / filename
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"Saved enhanced binary plot: binary_comparisons/{time_scale}/{filename}")
+
+        return fig
+
     def create_temporal_evolution_analysis(self, feature_type: str = 'final_model',
                                          time_scale: str = 'decades',
                                          figsize: Tuple[int, int] = (20, 12)) -> plt.Figure:
         """
-        Create comprehensive temporal evolution analysis showing how performance
-        evolves across historical periods for all datasets and key metrics.
+        Temporal evolution analysis showing performance across historical periods.
 
         Args:
             feature_type: Feature type to analyze
@@ -1163,6 +1471,133 @@ class ModelResultsAnalyzer:
 
         return fig
 
+    def create_3x2_feature_sensitivity_plot(self, time_scale: str = 'decades',
+                                           figsize: tuple = (18, 12)) -> plt.Figure:
+        """
+        Create the exact 3x2 feature sensitivity plot that matches the image with fixed legend.
+        """
+        logger.info(f"Creating 3x2 feature domain sensitivity plot for {time_scale}")
+
+        # Feature types in the desired order for the 3x2 grid
+        feature_types = ['compression', 'lexical_structure', 'readability',
+                        'distance', 'neologism', 'final_model']
+
+        # Colors and styles for metrics (matching the separate script)
+        metric_colors = {
+            'accuracy': '#1f77b4',    # Blue - solid line
+            'auc_roc': '#ff7f0e',     # Orange - dashed line
+            'auprc': '#2ca02c'        # Green - dotted line
+        }
+
+        metric_styles = {
+            'accuracy': '-',    # solid
+            'auc_roc': '--',    # dashed
+            'auprc': ':'        # dotted
+        }
+
+        # Create 3x2 subplot grid
+        fig, axes = plt.subplots(2, 3, figsize=figsize)
+        fig.suptitle(f'Feature Domain Temporal Sensitivity Analysis ({time_scale.title()})',
+                    fontsize=20, fontweight='bold', y=0.96)
+
+        # Adjust spacing for better layout
+        plt.subplots_adjust(hspace=0.35, wspace=0.25, top=0.85, bottom=0.10, left=0.08, right=0.95)
+
+        # Define subplot positions for 3x2 grid
+        subplot_positions = [
+            (0, 0), (0, 1), (0, 2),  # Top row
+            (1, 0), (1, 1), (1, 2)   # Bottom row
+        ]
+
+        # Plot each feature type
+        for idx, feature_type in enumerate(feature_types):
+            row, col = subplot_positions[idx]
+            ax = axes[row, col]
+
+            if (feature_type in self.binary_results and
+                time_scale in self.binary_results[feature_type]):
+
+                # Use test dataset for primary analysis
+                if 'test' in self.binary_results[feature_type][time_scale]:
+                    df = self.binary_results[feature_type][time_scale]['test']
+
+                    # Filter for CatBoost model (most stable performer)
+                    model_data = df[df['model'].str.contains('catboost', na=False)]
+
+                    if not model_data.empty:
+                        # Get thresholds
+                        thresholds = model_data['threshold'].values
+                        if time_scale == 'centuries':
+                            thresholds = thresholds / 100  # Convert to century scale
+
+                        # Plot the three main metrics
+                        for metric in ['accuracy', 'auc_roc', 'auprc']:
+                            if metric in model_data.columns:
+                                metric_values = model_data[metric].values
+
+                                ax.plot(thresholds, metric_values,
+                                       color=metric_colors[metric],
+                                       linestyle=metric_styles[metric],
+                                       linewidth=3.0, alpha=0.85,
+                                       label=metric.replace('_', ' ').upper(),
+                                       zorder=2)
+
+                        # Add random baseline if available
+                        random_data = df[df['model'] == 'random']
+                        if not random_data.empty and 'accuracy' in random_data.columns:
+                            random_thresholds = random_data['threshold'].values
+                            if time_scale == 'centuries':
+                                random_thresholds = random_thresholds / 100
+                            random_accuracy = random_data['accuracy'].values
+
+                            ax.plot(random_thresholds, random_accuracy,
+                                   color='red', linestyle='-', alpha=0.5, linewidth=2,
+                                   label='Random', zorder=1)
+
+            # Customize subplot
+            ax.set_title(feature_type.replace('_', ' ').title(),
+                        fontsize=14, fontweight='bold', pad=15)
+            ax.set_xlabel('Temporal Threshold', fontsize=12)
+            ax.set_ylabel('Performance Score', fontsize=12)
+            ax.grid(True, alpha=0.3, color='gray', linewidth=0.5, zorder=0)
+            ax.set_ylim(0.0, 1.05)
+            ax.tick_params(axis='both', labelsize=11)
+
+            # Set proper x-axis formatting for decades/centuries
+            if time_scale == 'centuries':
+                # For centuries, show century labels from 18 to 20
+                ax.set_xlim(0.18, 0.20)
+                ax.set_xticks([0.18, 0.19, 0.20])
+                ax.set_xticklabels(['18', '19', '20'])
+            # For decades, let matplotlib handle the range automatically
+
+        # Add shared legend positioned to the left of the title (FIXED POSITION)
+        # Create legend handles for the metrics
+        legend_handles = []
+        legend_labels = []
+
+        # Create legend entries for the metrics shown
+        for metric in ['accuracy', 'auc_roc', 'auprc']:
+            line = plt.Line2D([0], [0],
+                            color=metric_colors[metric],
+                            linestyle=metric_styles[metric],
+                            linewidth=3.0, alpha=0.85)
+            legend_handles.append(line)
+            legend_labels.append(metric.replace('_', ' ').upper())
+
+        # Add random baseline
+        random_line = plt.Line2D([0], [0], color='red', linestyle='-',
+                               alpha=0.5, linewidth=2)
+        legend_handles.append(random_line)
+        legend_labels.append('Random')
+
+        # Position legend to the left of the title
+        fig.legend(legend_handles, legend_labels, bbox_to_anchor=(0.01, 0.96),
+                  loc='upper left', fontsize=12, frameon=True, fancybox=True,
+                  shadow=True, facecolor='white', framealpha=0.9, ncol=2)
+
+        return fig
+
     def _simulate_threshold_curve(self, thresholds: np.ndarray, base_performance: float,
                                 time_scale: str) -> np.ndarray:
         """
@@ -1195,12 +1630,12 @@ class ModelResultsAnalyzer:
         return curve
 
     def create_comprehensive_report(self, metrics: List[str] = None):
-        """Create comprehensive report with all visualizations."""
+        """Create report with all visualizations."""
         if metrics is None:
             # Use all available metrics from both base and binary models
             metrics = list(set(self.BASE_METRICS + self.BINARY_METRICS))
 
-        logger.info("Creating comprehensive report...")
+        logger.info("Creating report...")
 
         # Load all data
         self.load_all_data()
@@ -1274,23 +1709,72 @@ class ModelResultsAnalyzer:
         with open(self.output_dir / 'report_summary.json', 'w') as f:
             json.dump(report_summary, f, indent=2)
 
-        logger.info(f"Comprehensive report created with {report_summary['total_plots']} plots")
+        logger.info(f"Report created with {report_summary['total_plots']} plots")
         logger.info(f"All outputs saved to: {self.output_dir}")
 
         return report_summary
+
+    def create_enhanced_chapter6_plots(self):
+        """Create enhanced plots for Chapter 6 with improved formatting and layout."""
+        logger.info("Creating enhanced Chapter 6 plots...")
+
+        self.load_all_data()
+
+        # 1. Create 2x2 ranking metrics (AUC-ROC and AUPRC)
+        for dataset in ['test', 'gutenberg']:
+            fig = self.create_2x2_ranking_heatmaps(dataset)
+            if fig:
+                plt.close(fig)
+                logger.info(f"Created 2x2 ranking heatmaps for {dataset}")
+
+        # 2. Create 2x2 error metrics (MAE and RMSE)
+        for dataset in ['test', 'gutenberg']:
+            fig = self.create_2x2_error_heatmaps(dataset)
+            if fig:
+                plt.close(fig)
+                logger.info(f"Created 2x2 error heatmaps for {dataset}")
+
+        # 3. Create combined top-k plots
+        for time_scale in ['decades', 'centuries']:
+            for dataset in ['test', 'gutenberg']:
+                fig = self.create_topk_combined_plot(time_scale, dataset)
+                if fig:
+                    plt.close(fig)
+                    logger.info(f"Created combined top-k plot for {time_scale} {dataset}")
+
+        # 4. Create enhanced binary classification plots with bigger labels
+        for time_scale in ['decades', 'centuries']:
+            for model in ['catboost', 'xgboost']:
+                fig = self.create_enhanced_binary_threshold_plots('final_model', time_scale, model)
+                if fig:
+                    plt.close(fig)
+                    logger.info(f"Created enhanced binary plot for {model} {time_scale}")
+
+        # 5. Create the 3x2 feature sensitivity plots that match the image you showed
+        for time_scale in ['decades', 'centuries']:
+            fig = self.create_3x2_feature_sensitivity_plot(time_scale)
+            if fig:
+                # Save to Thesis figs directory to replace existing plots
+                filename = f"feature_domain_sensitivity_{time_scale}_fixed_3x2.png"
+                fig_path = Path(f"/data/home/paulojnpinto02/TextDate/Feature-Benchmark/Thesis/figs/{filename}")
+                plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                logger.info(f"Updated feature sensitivity plot with fixed legend: {fig_path}")
+
+        logger.info("All enhanced Chapter 6 plots created successfully!")
 
 
 def main():
     """Main function with command line interface."""
     parser = argparse.ArgumentParser(
-        description="Comprehensive Model Comparison Plotting Script for TextDate Feature-Benchmark",
+        description="Model comparison plotting for TextDate Feature-Benchmark",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
     parser.add_argument('--base_dir', type=str, required=True,
-                       help='Base directory containing Saved_models_results and Saved_models_binary')
+                       help='Base directory containing Results/saved_models_results and Saved_models_binary')
     parser.add_argument('--output_dir', type=str, default=None,
-                       help='Output directory for plots (default: base_dir/comparison_plots)')
+                       help='Output directory for plots (default: base_dir/Results/comparison_plots)')
     parser.add_argument('--metrics', nargs='+', default=None,
                        help='Metrics to analyze (default: all available metrics)')
     parser.add_argument('--time_scales', nargs='+', choices=['decades', 'centuries'],
@@ -1301,7 +1785,7 @@ def main():
                        default=['compression', 'lexical_structure', 'readability', 'distance', 'neologism', 'final_model'],
                        help='Feature types to analyze (default: all)')
     parser.add_argument('--plot_types', nargs='+',
-                       choices=['heatmap', 'binary_comparison', 'dataset_comparison', 'time_comparison', 'all'],
+                       choices=['heatmap', 'binary_comparison', 'dataset_comparison', 'time_comparison', 'chapter6_enhanced', 'all'],
                        default=['all'],
                        help='Types of plots to create (default: all)')
     parser.add_argument('--figsize', nargs=2, type=int, default=[12, 8],
@@ -1324,8 +1808,11 @@ def main():
         analyzer.FEATURE_TYPES = args.feature_types
 
     try:
-        if 'all' in args.plot_types:
-            # Create comprehensive report
+        if 'chapter6_enhanced' in args.plot_types:
+            # Create enhanced Chapter 6 plots
+            analyzer.create_enhanced_chapter6_plots()
+        elif 'all' in args.plot_types:
+            # Create all plots
             analyzer.create_comprehensive_report(args.metrics)
         else:
             # Load data

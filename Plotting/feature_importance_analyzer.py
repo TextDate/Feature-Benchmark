@@ -94,10 +94,14 @@ class FeatureImportanceAnalyzer:
         plt.style.use('seaborn-v0_8')
         plt.figure(figsize=(12, 8))
         bars = plt.bar(range(len(top_features)), top_importances, alpha=0.8, color='#FF6B6B')
-        plt.xticks(range(len(top_features)), top_features, rotation=45, ha='right')
-        plt.title("Tree-Based Feature Importances (Top 20)", fontsize=14, fontweight='bold')
-        plt.xlabel("Features", fontsize=12, fontweight='bold')
-        plt.ylabel("Importance", fontsize=12, fontweight='bold')
+        plt.xticks(range(len(top_features)), top_features, rotation=45, ha='right', fontsize=14)
+        # Dynamic title based on number of features
+        if len(self.feature_names) > 20:
+            plt.title("Tree-Based Feature Importances (Top 20)", fontsize=16, fontweight='bold')
+        else:
+            plt.title("Tree-Based Feature Importances", fontsize=16, fontweight='bold')
+        plt.xlabel("Features", fontsize=14, fontweight='bold')
+        plt.ylabel("Importance", fontsize=14, fontweight='bold')
         plt.grid(True, alpha=0.3, axis='y')
 
         # Add value labels on bars
@@ -138,10 +142,14 @@ class FeatureImportanceAnalyzer:
         plt.figure(figsize=(12, 8))
         bars = plt.bar(range(len(top_features)), top_scores, yerr=top_stds,
                       alpha=0.8, color='#4ECDC4', capsize=5, error_kw={'elinewidth': 1})
-        plt.xticks(range(len(top_features)), top_features, rotation=45, ha='right')
-        plt.title("Permutation Importances with Standard Deviation (Top 20)", fontsize=14, fontweight='bold')
-        plt.xlabel("Features", fontsize=12, fontweight='bold')
-        plt.ylabel("Importance Score", fontsize=12, fontweight='bold')
+        plt.xticks(range(len(top_features)), top_features, rotation=45, ha='right', fontsize=14)
+        # Dynamic title based on number of features
+        if len(self.feature_names) > 20:
+            plt.title("Permutation Importances with Standard Deviation (Top 20)", fontsize=16, fontweight='bold')
+        else:
+            plt.title("Permutation Importances with Standard Deviation", fontsize=16, fontweight='bold')
+        plt.xlabel("Features", fontsize=14, fontweight='bold')
+        plt.ylabel("Importance Score", fontsize=14, fontweight='bold')
         plt.grid(True, alpha=0.3, axis='y')
 
         # Add value labels on bars
@@ -494,11 +502,17 @@ class FeatureImportanceAnalyzer:
 
         # Generate heatmap plot for visual use
         plt.style.use('seaborn-v0_8')
+
+        # Check if this is final model (has features from multiple subsets)
+        is_final_model = len(self.feature_names) > 20
+
         plt.figure(figsize=(14, 12))
         mask = np.triu(np.ones_like(corr, dtype=bool))  # Show only lower triangle
         sns.heatmap(corr, mask=mask, cmap='coolwarm', center=0, annot=False,
                    square=True, fmt=".2f", cbar=True, cbar_kws={"shrink": 0.8})
-        plt.title("Feature Correlation Matrix (Lower Triangle)", fontsize=14, fontweight='bold')
+        plt.title("Feature Correlation Matrix (Lower Triangle)", fontsize=16, fontweight='bold')
+
+        plt.tick_params(axis='both', which='major', labelsize=10)
         plt.tight_layout()
         plt.savefig(os.path.join(corr_dir, "correlation_matrix.png"), dpi=300, bbox_inches='tight')
         plt.close()
@@ -552,10 +566,450 @@ class FeatureImportanceAnalyzer:
             print("[INFO] Saved correlation matrix.", flush=True)
 
 
+
+    def create_combined_2x2_plot(self, output_dir):
+        """Create a combined plot with analyses - 2x2 for subsets, 1x3 for final model"""
+        print("[INFO] Creating combined feature analysis plot...", flush=True)
+
+        # Check if this is final model
+        is_final_model = len(self.feature_names) > 20
+
+        # Set up the subplot - 1x3 for final model, 2x2 for subsets
+        if is_final_model:
+            fig, axes = plt.subplots(1, 3, figsize=(24, 8))
+            fig.suptitle('Feature Analysis Overview', fontsize=20, y=1.02)
+            ax1 = axes[0]
+            ax2 = axes[1]
+            ax3 = axes[2]
+            ax4 = None  # No fourth plot for final model
+        else:
+            fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+            fig.suptitle('Feature Analysis Overview', fontsize=20, y=0.98)
+            ax1 = axes[0, 0]
+            ax2 = axes[0, 1]
+            ax3 = axes[1, 0]
+            ax4 = axes[1, 1]
+
+        # Plot 1: Tree-based importance
+        if hasattr(self.model, "feature_importances_"):
+            all_importances = self.model.feature_importances_
+            importances = all_importances[self.feature_indices_to_keep] if hasattr(self, 'feature_indices_to_keep') else all_importances
+            sorted_idx = np.argsort(importances)[::-1]
+
+            max_display = min(20, len(self.feature_names))
+            top_idx = sorted_idx[:max_display]
+            top_features = [self.feature_names[i] for i in top_idx]
+            top_importances = importances[top_idx]
+
+            bars1 = ax1.bar(range(len(top_features)), top_importances, alpha=0.8, color='#FF6B6B')
+            ax1.set_xticks(range(len(top_features)))
+            ax1.set_xticklabels(top_features, rotation=45, ha='right', fontsize=10)
+            ax1.set_ylabel('Feature Importance', fontsize=14)
+            if is_final_model:
+                ax1.set_title('a) Tree-Based Importance (Top 20)', fontsize=16, fontweight='bold')
+            else:
+                ax1.set_title('a) Tree-Based Importance', fontsize=16, fontweight='bold')
+            ax1.grid(True, alpha=0.3, axis='y')
+
+        # Plot 2: Permutation importance
+        if is_final_model:
+            ax2 = axes[1]
+        else:
+            ax2 = axes[0, 1]
+        try:
+            from sklearn.inspection import permutation_importance
+            result = permutation_importance(self.model, self.X, self.y, n_repeats=5, random_state=42, n_jobs=2)
+            sorted_idx = result.importances_mean.argsort()[::-1]
+
+            max_display = min(20, len(self.feature_names))
+            top_idx = sorted_idx[:max_display]
+            top_features = [self.feature_names[i] for i in top_idx]
+            top_scores = result.importances_mean[top_idx]
+            top_stds = result.importances_std[top_idx]
+
+            bars2 = ax2.bar(range(len(top_features)), top_scores, yerr=top_stds,
+                           alpha=0.8, color='#4ECDC4', capsize=3)
+            ax2.set_xticks(range(len(top_features)))
+            ax2.set_xticklabels(top_features, rotation=45, ha='right', fontsize=10)
+            ax2.set_ylabel('Permutation Importance', fontsize=14)
+            if is_final_model:
+                ax2.set_title('b) Permutation Importance (Top 20)', fontsize=16, fontweight='bold')
+            else:
+                ax2.set_title('b) Permutation Importance', fontsize=16, fontweight='bold')
+            ax2.grid(True, alpha=0.3, axis='y')
+        except Exception as e:
+            ax2.text(0.5, 0.5, f'Permutation analysis failed: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+            ax2.set_title('b) Permutation Importance (Failed)', fontsize=16, fontweight='bold')
+
+        # Plot 3: PCA contributions
+        if is_final_model:
+            ax3 = axes[2]
+        else:
+            ax3 = axes[1, 0]
+        try:
+            from sklearn.decomposition import PCA
+            from sklearn.preprocessing import StandardScaler
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(self.X)
+            pca = PCA(n_components=min(X_scaled.shape[0], X_scaled.shape[1]))
+            pca.fit(X_scaled)
+
+            loadings = pd.DataFrame(
+                pca.components_.T,
+                index=self.feature_names,
+                columns=[f"PC{i+1}" for i in range(pca.n_components_)]
+            )
+            mean_abs_loading = loadings.abs().mean(axis=1).sort_values(ascending=False)
+
+            # Limit to top 20 features for better readability in 2x2 plot
+            max_display = min(20, len(mean_abs_loading))
+            top_pca_features = mean_abs_loading.head(max_display)
+
+            bars3 = ax3.bar(range(len(top_pca_features)), top_pca_features.values,
+                           alpha=0.8, color='#45B7D1')
+            ax3.set_xticks(range(len(top_pca_features)))
+            ax3.set_xticklabels(top_pca_features.index, rotation=45, ha='right', fontsize=10)
+            ax3.set_ylabel('Mean |Loading|', fontsize=14)
+            if is_final_model:
+                ax3.set_title('c) PCA Feature Contributions (Top 20)', fontsize=16, fontweight='bold')
+            else:
+                ax3.set_title('c) PCA Feature Contributions', fontsize=16, fontweight='bold')
+            ax3.grid(True, alpha=0.3, axis='y')
+        except Exception as e:
+            ax3.text(0.5, 0.5, f'PCA analysis failed: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title('c) PCA Analysis (Failed)', fontsize=16, fontweight='bold')
+
+        # Plot 4: Correlation matrix (bottom-right) - Only for feature subsets
+        if ax4 is not None:  # Only process if ax4 exists (i.e., not final model)
+            # For feature subsets, show correlation matrix (simple approach like individual plots)
+            try:
+                df = pd.DataFrame(self.X, columns=self.feature_names)
+                corr = df.corr()
+
+                import seaborn as sns
+                # Use upper triangle mask for cleaner look
+                mask = np.triu(np.ones_like(corr, dtype=bool))
+
+                # Simple heatmap like the individual correlation matrix
+                sns.heatmap(corr, mask=mask, cmap='coolwarm', center=0, ax=ax4,
+                           cbar_kws={"shrink": 0.6}, square=True, annot=False,
+                           xticklabels=True, yticklabels=True)
+
+                ax4.set_title('d) Feature Correlation Matrix', fontsize=16, fontweight='bold')
+                ax4.tick_params(axis='both', which='major', labelsize=8)
+            except Exception as e:
+                ax4.text(0.5, 0.5, f'Correlation analysis failed: {str(e)[:50]}...',
+                        ha='center', va='center', transform=ax4.transAxes, fontsize=12)
+                ax4.set_title('d) Correlation Analysis (Failed)', fontsize=16, fontweight='bold')
+
+        plt.tight_layout()
+        if is_final_model:
+            plt.subplots_adjust(top=0.88)  # Make room for suptitle in 1x3 layout
+        else:
+            plt.subplots_adjust(top=0.94)  # Make room for suptitle in 2x2 layout
+
+        # Save the combined plot
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, "combined_feature_analysis.png"),
+                   dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print("[INFO] Saved combined 2x2 feature analysis plot.", flush=True)
+
+    def create_combined_1x3_plot(self, output_dir):
+        print("[INFO] Creating combined 1x3 feature analysis plot...", flush=True)
+        fig, axes = plt.subplots(1, 3, figsize=(24, 8))
+        fig.suptitle('Feature Analysis Overview', fontsize=20, y=1.02)
+
+        ax1 = axes[0]
+        if hasattr(self.model, "feature_importances_"):
+            all_importances = self.model.feature_importances_
+            importances = all_importances[self.feature_indices_to_keep] if hasattr(self, 'feature_indices_to_keep') else all_importances
+            sorted_idx = np.argsort(importances)[::-1]
+
+            max_display = min(20, len(self.feature_names))
+            top_idx = sorted_idx[:max_display]
+            top_features = [self.feature_names[i] for i in top_idx]
+            top_importances = importances[top_idx]
+
+            bars1 = ax1.bar(range(len(top_features)), top_importances, alpha=0.8, color='#FF6B6B')
+            ax1.set_xticks(range(len(top_features)))
+            ax1.set_xticklabels(top_features, rotation=45, ha='right', fontsize=10)
+            ax1.set_ylabel('Feature Importance', fontsize=14)
+            ax1.set_title('a) Tree-Based Importance (Top 20)', fontsize=16, fontweight='bold')
+            ax1.grid(True, alpha=0.3, axis='y')
+
+        ax2 = axes[1]
+        try:
+            from sklearn.inspection import permutation_importance
+            result = permutation_importance(self.model, self.X, self.y, n_repeats=5, random_state=42, n_jobs=2)
+            sorted_idx = result.importances_mean.argsort()[::-1]
+
+            max_display = min(20, len(self.feature_names))
+            top_idx = sorted_idx[:max_display]
+            top_features = [self.feature_names[i] for i in top_idx]
+            top_scores = result.importances_mean[top_idx]
+            top_stds = result.importances_std[top_idx]
+
+            bars2 = ax2.bar(range(len(top_features)), top_scores, yerr=top_stds,
+                           alpha=0.8, color='#4ECDC4', capsize=3)
+            ax2.set_xticks(range(len(top_features)))
+            ax2.set_xticklabels(top_features, rotation=45, ha='right', fontsize=10)
+            ax2.set_ylabel('Permutation Importance', fontsize=14)
+            ax2.set_title('b) Permutation Importance (Top 20)', fontsize=16, fontweight='bold')
+            ax2.grid(True, alpha=0.3, axis='y')
+        except Exception as e:
+            ax2.text(0.5, 0.5, f'Permutation analysis failed: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+            ax2.set_title('b) Permutation Importance (Failed)', fontsize=16, fontweight='bold')
+
+        ax3 = axes[2]
+        try:
+            df = pd.DataFrame(self.X, columns=self.feature_names)
+            corr = df.corr()
+
+            import seaborn as sns
+            mask = np.triu(np.ones_like(corr, dtype=bool))
+
+            sns.heatmap(corr, mask=mask, cmap='coolwarm', center=0, ax=ax3,
+                       cbar_kws={"shrink": 0.6}, square=True, annot=False,
+                       xticklabels=True, yticklabels=True)
+
+            ax3.set_title('c) Feature Correlation Matrix', fontsize=16, fontweight='bold')
+            ax3.tick_params(axis='both', which='major', labelsize=8)
+        except Exception as e:
+            ax3.text(0.5, 0.5, f'Correlation analysis failed: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title('c) Correlation Analysis (Failed)', fontsize=16, fontweight='bold')
+
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.88, wspace=0.3)
+
+        os.makedirs(output_dir, exist_ok=True)
+        plt.savefig(os.path.join(output_dir, "combined_1x3_feature_analysis.png"),
+                   dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+        print("[INFO] Saved combined 1x3 feature analysis plot.", flush=True)
+
+
+    def create_shap_grid(self, output_dir):
+        """Create a 2x3 grid combining 5 century-specific SHAP summary plots"""
+        print("[INFO] Creating SHAP grid for 5 centuries...", flush=True)
+
+        shap_dir = os.path.join(output_dir, "shap_analysis")
+
+        # Check if SHAP directory exists
+        if not os.path.exists(shap_dir):
+            print("[WARNING] SHAP analysis directory not found. Skipping SHAP grid creation.", flush=True)
+            return
+
+        # Define the centuries
+        centuries = [17, 18, 19, 20, 21]
+
+        # Check if all required SHAP images exist
+        missing_images = []
+        for century in centuries:
+            img_path = os.path.join(shap_dir, f"shap_summary_century_{century}.png")
+            if not os.path.exists(img_path):
+                missing_images.append(f"century_{century}")
+
+        if missing_images:
+            print(f"[WARNING] Missing SHAP images: {missing_images}. Skipping SHAP grid creation.", flush=True)
+            return
+
+        # Create figure with 2x3 subplots (leaving bottom-right empty)
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        # Determine subset name for title
+        subset_name = "Feature Subset"
+        if len(self.feature_names) <= 10:
+            if any('compression' in name.lower() or 'nrc' in name.lower() or 'entropy' in name.lower()
+                   for name in self.feature_names):
+                subset_name = "Compression Features"
+            elif any('lexical' in name.lower() or 'richness' in name.lower() or 'word' in name.lower()
+                     for name in self.feature_names):
+                subset_name = "Lexical Structure Features"
+            elif any('readability' in name.lower() or 'flesch' in name.lower() or 'stopword' in name.lower()
+                     for name in self.feature_names):
+                subset_name = "Readability Features"
+            elif len(self.feature_names) == 11:
+                subset_name = "Neologism Features"
+            elif len(self.feature_names) > 15:
+                subset_name = "Distance Features"
+        elif len(self.feature_names) > 40:
+            subset_name = "Final Model (All Features)"
+
+        fig.suptitle(f'SHAP Analysis by Century - {subset_name}',
+                     fontsize=20, fontweight='bold', y=0.95)
+
+        # Positions for the 5 plots: (0,0), (0,1), (0,2), (1,0), (1,1)
+        positions = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1)]
+
+        for idx, century in enumerate(centuries):
+            row, col = positions[idx]
+            ax = axes[row, col]
+
+            # Load and display the SHAP image
+            img_path = os.path.join(shap_dir, f"shap_summary_century_{century}.png")
+
+            try:
+                import matplotlib.image as mpimg
+                img = mpimg.imread(img_path)
+                ax.imshow(img)
+                ax.set_title(f'{century}th Century', fontsize=16, fontweight='bold', pad=10)
+            except Exception as e:
+                ax.text(0.5, 0.5, f'Error loading image:\n{century}th Century\n{str(e)[:30]}...',
+                       ha='center', va='center', fontsize=12, color='red')
+                ax.set_title(f'{century}th Century (Error)', fontsize=16, color='red')
+
+            ax.axis('off')
+
+        # Remove the empty subplot (bottom right)
+        axes[1, 2].axis('off')
+
+        # Adjust layout
+        plt.tight_layout()
+        plt.subplots_adjust(top=0.90, bottom=0.05, left=0.05, right=0.95,
+                           hspace=0.15, wspace=0.10)
+
+        # Save the grid
+        grid_path = os.path.join(output_dir, "shap_grid.png")
+        plt.savefig(grid_path, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close()
+
+        print(f"[INFO] Saved SHAP grid: {grid_path}", flush=True)
+
+
+def create_comparative_2x3_plot(feature_subset, model_dir, test_csv, drop_cols, output_dir):
+    """Create a 2x3 comparative plot comparing decades vs centuries for a feature subset"""
+    print(f"[INFO] Creating comparative 2x3 plot for {feature_subset} subset...", flush=True)
+
+    import os
+    import glob
+
+    # Find decade and century models for this feature subset
+    decade_model_pattern = os.path.join(model_dir, feature_subset, "decades", "*catboost*.pkl")
+    century_model_pattern = os.path.join(model_dir, feature_subset, "centuries", "*catboost*.pkl")
+
+    decade_models = glob.glob(decade_model_pattern)
+    century_models = glob.glob(century_model_pattern)
+
+    if not decade_models:
+        print(f"[WARNING] No decade model found for {feature_subset}", flush=True)
+        return
+    if not century_models:
+        print(f"[WARNING] No century model found for {feature_subset}", flush=True)
+        return
+
+    decade_model_path = decade_models[0]
+    century_model_path = century_models[0]
+
+    print(f"[INFO] Using decade model: {decade_model_path}", flush=True)
+    print(f"[INFO] Using century model: {century_model_path}", flush=True)
+
+    # Create analyzers for both models
+    decade_analyzer = FeatureImportanceAnalyzer(decade_model_path, test_csv, "decade", drop_cols)
+    century_analyzer = FeatureImportanceAnalyzer(century_model_path, test_csv, "century", drop_cols)
+
+    # Create 2x3 subplot
+    fig, axes = plt.subplots(2, 3, figsize=(24, 16))
+    fig.suptitle(f'Feature Analysis Comparison: {feature_subset.title()} Features', fontsize=20, y=0.98)
+
+    analyzers = [century_analyzer, decade_analyzer]
+    row_names = ['Centuries', 'Decades']
+
+    for row_idx, (analyzer, row_name) in enumerate(zip(analyzers, row_names)):
+
+        # Plot 1: Tree-based importance
+        ax1 = axes[row_idx, 0]
+        if hasattr(analyzer.model, "feature_importances_"):
+            all_importances = analyzer.model.feature_importances_
+            importances = all_importances[analyzer.feature_indices_to_keep] if hasattr(analyzer, 'feature_indices_to_keep') else all_importances
+            sorted_idx = np.argsort(importances)[::-1]
+
+            max_display = min(20, len(analyzer.feature_names))
+            top_idx = sorted_idx[:max_display]
+            top_features = [analyzer.feature_names[i] for i in top_idx]
+            top_importances = importances[top_idx]
+
+            bars1 = ax1.bar(range(len(top_features)), top_importances, alpha=0.8, color='#FF6B6B')
+            ax1.set_xticks(range(len(top_features)))
+            ax1.set_xticklabels(top_features, rotation=45, ha='right', fontsize=10)
+            ax1.set_ylabel('Feature Importance', fontsize=14)
+            ax1.set_title(f'a) Tree-Based Importance - {row_name}', fontsize=16, fontweight='bold')
+            ax1.grid(True, alpha=0.3, axis='y')
+
+        # Plot 2: Permutation importance
+        ax2 = axes[row_idx, 1]
+        try:
+            from sklearn.inspection import permutation_importance
+            result = permutation_importance(analyzer.model, analyzer.X, analyzer.y, n_repeats=5, random_state=42, n_jobs=2)
+            sorted_idx = result.importances_mean.argsort()[::-1]
+
+            max_display = min(20, len(analyzer.feature_names))
+            top_idx = sorted_idx[:max_display]
+            top_features = [analyzer.feature_names[i] for i in top_idx]
+            top_scores = result.importances_mean[top_idx]
+            top_stds = result.importances_std[top_idx]
+
+            bars2 = ax2.bar(range(len(top_features)), top_scores, yerr=top_stds,
+                           alpha=0.8, color='#4ECDC4', capsize=3)
+            ax2.set_xticks(range(len(top_features)))
+            ax2.set_xticklabels(top_features, rotation=45, ha='right', fontsize=10)
+            ax2.set_ylabel('Permutation Importance', fontsize=14)
+            ax2.set_title(f'b) Permutation Importance - {row_name}', fontsize=16, fontweight='bold')
+            ax2.grid(True, alpha=0.3, axis='y')
+        except Exception as e:
+            ax2.text(0.5, 0.5, f'Permutation analysis failed: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax2.transAxes, fontsize=12)
+            ax2.set_title(f'b) Permutation Importance - {row_name} (Failed)', fontsize=16, fontweight='bold')
+
+        # Plot 3: Correlation matrix
+        ax3 = axes[row_idx, 2]
+        try:
+            df = pd.DataFrame(analyzer.X, columns=analyzer.feature_names)
+            corr = df.corr()
+
+            import seaborn as sns
+            mask = np.triu(np.ones_like(corr, dtype=bool))
+
+            sns.heatmap(corr, mask=mask, cmap='coolwarm', center=0, ax=ax3,
+                       cbar_kws={"shrink": 0.6}, square=True, annot=False,
+                       xticklabels=True, yticklabels=True)
+
+            ax3.set_title(f'c) Feature Correlation Matrix - {row_name}', fontsize=16, fontweight='bold')
+            ax3.tick_params(axis='both', which='major', labelsize=8)
+        except Exception as e:
+            ax3.text(0.5, 0.5, f'Correlation analysis failed: {str(e)[:50]}...',
+                    ha='center', va='center', transform=ax3.transAxes, fontsize=12)
+            ax3.set_title(f'c) Correlation Analysis - {row_name} (Failed)', fontsize=16, fontweight='bold')
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.94, hspace=0.4, wspace=0.35)
+
+    # Save the comparative plot
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, f"comparative_2x3_{feature_subset}.png")
+    plt.savefig(output_path, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"[INFO] Saved comparative 2x3 plot: {output_path}", flush=True)
+
+
 def main(args):
     drop_cols = [col.strip() for group in args.drop_cols for col in group.split(",")]
     analyzer = FeatureImportanceAnalyzer(args.model, args.test_csv, args.target, drop_cols)
 
+    # Create the combined 2x2 plot first
+    analyzer.create_combined_2x2_plot(args.output_dir)
+
+    # Create the combined 1x3 plot if requested
+    if args.combined_1x3:
+        analyzer.create_combined_1x3_plot(args.output_dir)
+
+
+    # Individual plots (keep for detailed analysis)
     if args.tree:
         analyzer.plot_tree_feature_importance(args.output_dir)
     if args.correlation:
@@ -566,19 +1020,76 @@ def main(args):
         analyzer.plot_permutation_importance(args.output_dir)
     if args.shap:
         analyzer.plot_shap_summary(args.output_dir)
+        # Create SHAP grid after individual SHAP plots
+        analyzer.create_shap_grid(args.output_dir)
+
+
+def main_comparative_2x3(args):
+    """Entry point for comparative 2x3 plots across feature subsets."""
+    drop_cols = [col.strip() for group in args.drop_cols for col in group.split(",")]
+
+    print(f"[INFO] Creating comparative 2x3 plots for feature subsets: {args.feature_subsets}")
+    print(f"[INFO] Model directory: {args.model_dir}")
+    print(f"[INFO] Test data: {args.test_csv}")
+    print(f"[INFO] Output directory: {args.output_dir}")
+
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    success_count = 0
+    total_count = len(args.feature_subsets)
+
+    for feature_subset in args.feature_subsets:
+        print(f"\n[INFO] Processing {feature_subset} subset...")
+        try:
+            create_comparative_2x3_plot(
+                feature_subset=feature_subset,
+                model_dir=args.model_dir,
+                test_csv=args.test_csv,
+                drop_cols=drop_cols,
+                output_dir=args.output_dir
+            )
+            success_count += 1
+            print(f"[SUCCESS] Completed {feature_subset} subset")
+        except Exception as e:
+            print(f"[ERROR] Failed to process {feature_subset} subset: {e}")
+
+    print(f"\n[SUMMARY] Successfully created {success_count}/{total_count} comparative plots")
+    print(f"[INFO] Plots saved in: {args.output_dir}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze and plot feature importances for a trained model")
-    parser.add_argument("--model", required=True, help="Path to .pkl file (model, label_encoder, feature_names)")
-    parser.add_argument("--test_csv", required=True, help="CSV with features and target")
-    parser.add_argument("--target", required=True, help="Target column name (e.g., 'decade')")
-    parser.add_argument("--drop_cols", nargs="+", required=True, help="Comma-separated columns to drop")
-    parser.add_argument("--output_dir", default="feature_importance_plots", help="Where to save plots")
-    parser.add_argument("--tree", action="store_true", help="Plot tree-based feature importances")
-    parser.add_argument("--permutation", action="store_true", help="Plot permutation importances")
-    parser.add_argument("--pca", action="store_true", help="Plot PCA-based loadings")
-    parser.add_argument("--shap", action="store_true", help="Plot SHAP summary plot")
-    parser.add_argument("--correlation", action="store_true", help="Plot correlation matrix")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Default single-model analysis mode
+    analyze_parser = subparsers.add_parser("analyze", help="Single-model feature importance analysis")
+    analyze_parser.add_argument("--model", required=True, help="Path to .pkl file (model, label_encoder, feature_names)")
+    analyze_parser.add_argument("--test_csv", required=True, help="CSV with features and target")
+    analyze_parser.add_argument("--target", required=True, help="Target column name (e.g., 'decade')")
+    analyze_parser.add_argument("--drop_cols", nargs="+", required=True, help="Comma-separated columns to drop")
+    analyze_parser.add_argument("--output_dir", default="feature_importance_plots", help="Where to save plots")
+    analyze_parser.add_argument("--tree", action="store_true", help="Plot tree-based feature importances")
+    analyze_parser.add_argument("--permutation", action="store_true", help="Plot permutation importances")
+    analyze_parser.add_argument("--pca", action="store_true", help="Plot PCA-based loadings")
+    analyze_parser.add_argument("--shap", action="store_true", help="Plot SHAP summary plot")
+    analyze_parser.add_argument("--correlation", action="store_true", help="Plot correlation matrix")
+    analyze_parser.add_argument("--combined_1x3", action="store_true", help="Create 1x3 combined plot (no PCA)")
+
+    # Comparative 2x3 mode
+    comparative_parser = subparsers.add_parser("comparative", help="Comparative 2x3 plots across feature subsets")
+    comparative_parser.add_argument("--model_dir", default="Saved_models", help="Model directory")
+    comparative_parser.add_argument("--test_csv", required=True, help="CSV with features and target")
+    comparative_parser.add_argument("--drop_cols", nargs="+", required=True, help="Comma-separated columns to drop")
+    comparative_parser.add_argument("--output_dir", default="Results/comparative_2x3_plots", help="Where to save plots")
+    comparative_parser.add_argument("--feature_subsets", nargs="+",
+                                    default=["optimal", "compression", "lexical_structure", "readability", "distance", "neologism", "final_model"],
+                                    help="Feature subsets to analyze")
+
     args = parser.parse_args()
-    main(args)
+
+    if args.command == "analyze":
+        main(args)
+    elif args.command == "comparative":
+        main_comparative_2x3(args)
+    else:
+        parser.print_help()

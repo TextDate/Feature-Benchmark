@@ -52,23 +52,19 @@ TOP_K_CENTURIES=1   # Top-K for century classification (5 classes)
 # Feature directories
 FEATURE_DIR="Extracted_features"
 LOG_DIR="logs"
+CONFIG_FILE="feature_configs.json"
 
-# Feature configurations (columns to drop - everything else is used)
+# Load feature configurations from JSON (columns to drop - everything else is used)
 declare -A FEATURE_CONFIGS
 
-FEATURE_CONFIGS[compression]="file_name,year,decade,century,Special_Character_Ratio,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
+load_feature_configs() {
+    local config_file="$1"
+    for subset in $(python3 -c "import json; f=open('$config_file'); print(' '.join(json.load(f).keys()))"); do
+        FEATURE_CONFIGS[$subset]=$(python3 -c "import json; f=open('$config_file'); print(','.join(json.load(f)['$subset']))")
+    done
+}
 
-FEATURE_CONFIGS[lexical_structure]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
-
-FEATURE_CONFIGS[readability]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
-
-FEATURE_CONFIGS[distance]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,contains_early_modern_words,contains_industrial_words,contains_late_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
-
-FEATURE_CONFIGS[neologism]="file_name,year,decade,century,Special_Character_Ratio,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Compression_Ratio_Order_2,NRC_Order_2,Entropy_Ratio_Order_2,Avg_Word_Length,Lexical_Richness,Avg_Sentence_Length,Punctuation_Density,Syllable_Per_Word,Digit_Ratio,Flesch_Readability,Stopword_Ratio,at,and,by,the,for,a,of,with,to,as,on,in,an,that,it,is,was"
-
-FEATURE_CONFIGS[final_model]="file_name,year,decade,century,Special_Character_Ratio"
-
-FEATURE_CONFIGS[optimal]="file_name,year,decade,century,Compression_Ratio_Order_1,NRC_Order_1,Entropy_Ratio_Order_1,Shannon_Entropy,Avg_Word_Length,Compression_Ratio_Order_2,Entropy_Ratio_Order_2,Flesch_Readability,Stopword_Ratio,of,the,a,and,in,with,to,is,at,an,that,for,was,it,as,contains_early_modern_words,contains_industrial_words,contains_early_20th_words,contains_post_war_words,contains_late_modern_words,contains_digital_dawn_words,contains_digital_native_words,contains_modern_vocabulary,contains_historical_vocabulary,vocabulary_modernity_score"
+load_feature_configs "$CONFIG_FILE"
 
 # Execution order and progress tracking
 TOTAL_PHASES=28  # 7 feature types × 4 workflows (decades/centuries × base/binary)
